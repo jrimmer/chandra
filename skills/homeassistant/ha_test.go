@@ -18,7 +18,7 @@ func TestHA_ImplementsTool(t *testing.T) {
 }
 
 func TestHA_GetState_Definition(t *testing.T) {
-	h := homeassistant.NewHAGetState("http://localhost:8123", "token", nil)
+	h := homeassistant.NewHAGetState("http://localhost:8123", "token")
 	def := h.Definition()
 
 	if def.Name != "homeassistant.get_state" {
@@ -32,7 +32,7 @@ func TestHA_GetState_Definition(t *testing.T) {
 }
 
 func TestHA_SetState_Definition(t *testing.T) {
-	h := homeassistant.NewHASetState("http://localhost:8123", "token", nil)
+	h := homeassistant.NewHASetState("http://localhost:8123", "token")
 	def := h.Definition()
 
 	if def.Name != "homeassistant.set_state" {
@@ -66,7 +66,8 @@ func TestHA_GetState_Execute_MockAPI(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	h := homeassistant.NewHAGetState(srv.URL, "test-token", srv.Client())
+	h := homeassistant.NewHAGetState(srv.URL, "test-token")
+	h.SetHTTPClient(srv.Client())
 	params, _ := json.Marshal(map[string]string{"entity_id": "light.living_room"})
 	call := pkg.ToolCall{ID: "get-1", Name: "homeassistant.get_state", Parameters: params}
 
@@ -105,7 +106,8 @@ func TestHA_SetState_Execute_MockAPI(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	h := homeassistant.NewHASetState(srv.URL, "test-token", srv.Client())
+	h := homeassistant.NewHASetState(srv.URL, "test-token")
+	h.SetHTTPClient(srv.Client())
 	params, _ := json.Marshal(map[string]string{
 		"domain":    "light",
 		"service":   "turn_off",
@@ -126,7 +128,7 @@ func TestHA_SetState_Execute_MockAPI(t *testing.T) {
 }
 
 func TestHA_GetState_MissingEntityID(t *testing.T) {
-	h := homeassistant.NewHAGetState("http://localhost:8123", "token", nil)
+	h := homeassistant.NewHAGetState("http://localhost:8123", "token")
 	params, _ := json.Marshal(map[string]string{})
 	call := pkg.ToolCall{ID: "get-2", Name: "homeassistant.get_state", Parameters: params}
 
@@ -143,7 +145,7 @@ func TestHA_GetState_MissingEntityID(t *testing.T) {
 }
 
 func TestHA_SetState_MissingDomain(t *testing.T) {
-	h := homeassistant.NewHASetState("http://localhost:8123", "token", nil)
+	h := homeassistant.NewHASetState("http://localhost:8123", "token")
 	params, _ := json.Marshal(map[string]string{"service": "turn_on"})
 	call := pkg.ToolCall{ID: "set-2", Name: "homeassistant.set_state", Parameters: params}
 
@@ -165,7 +167,8 @@ func TestHA_GetState_HTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	h := homeassistant.NewHAGetState(srv.URL, "bad-token", srv.Client())
+	h := homeassistant.NewHAGetState(srv.URL, "bad-token")
+	h.SetHTTPClient(srv.Client())
 	params, _ := json.Marshal(map[string]string{"entity_id": "sensor.temp"})
 	call := pkg.ToolCall{ID: "get-3", Name: "homeassistant.get_state", Parameters: params}
 

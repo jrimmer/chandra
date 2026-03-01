@@ -22,17 +22,17 @@ type HAGetState struct {
 	httpClient *http.Client
 }
 
-// NewHAGetState returns a new HAGetState. If client is nil, http.DefaultClient is used.
-func NewHAGetState(baseURL, token string, client *http.Client) *HAGetState {
-	if client == nil {
-		client = http.DefaultClient
-	}
+// NewHAGetState returns a new HAGetState using http.DefaultClient.
+func NewHAGetState(baseURL, token string) *HAGetState {
 	return &HAGetState{
 		baseURL:    baseURL,
 		token:      token,
-		httpClient: client,
+		httpClient: http.DefaultClient,
 	}
 }
+
+// SetHTTPClient replaces the HTTP client used by HAGetState. Useful for testing.
+func (h *HAGetState) SetHTTPClient(client *http.Client) { h.httpClient = client }
 
 // Definition returns the ToolDef for homeassistant.get_state.
 func (h *HAGetState) Definition() pkg.ToolDef {
@@ -93,17 +93,17 @@ type HASetState struct {
 	httpClient *http.Client
 }
 
-// NewHASetState returns a new HASetState. If client is nil, http.DefaultClient is used.
-func NewHASetState(baseURL, token string, client *http.Client) *HASetState {
-	if client == nil {
-		client = http.DefaultClient
-	}
+// NewHASetState returns a new HASetState using http.DefaultClient.
+func NewHASetState(baseURL, token string) *HASetState {
 	return &HASetState{
 		baseURL:    baseURL,
 		token:      token,
-		httpClient: client,
+		httpClient: http.DefaultClient,
 	}
 }
+
+// SetHTTPClient replaces the HTTP client used by HASetState. Useful for testing.
+func (h *HASetState) SetHTTPClient(client *http.Client) { h.httpClient = client }
 
 // Definition returns the ToolDef for homeassistant.set_state.
 func (h *HASetState) Definition() pkg.ToolDef {
