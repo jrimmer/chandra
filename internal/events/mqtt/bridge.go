@@ -201,8 +201,8 @@ func (b *bridge) validateEmbeddedSecurity() error {
 	isLocalhost := strings.EqualFold(host, "localhost")
 
 	if !isLoopback && !isLocalhost {
-		// Non-loopback bind; require auth.
-		if b.cfg.Username == "" && b.cfg.Password == "" {
+		// Non-loopback bind; require both username and password to be set.
+		if b.cfg.Username == "" || b.cfg.Password == "" {
 			return fmt.Errorf(
 				"mqtt bridge: embedded broker bound to %q requires auth configuration "+
 					"(set mqtt.username and mqtt.password)", bind)

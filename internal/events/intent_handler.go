@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -58,7 +59,8 @@ func (h *EventIntentHandler) Stop() {
 
 // handle is the event callback. It deduplicates, then creates an Intent.
 func (h *EventIntentHandler) handle(topic string, payload []byte) {
-	key := fmt.Sprintf("%s:%s", topic, string(payload))
+	raw := sha256.Sum256([]byte(fmt.Sprintf("%s:%s", topic, string(payload))))
+	key := fmt.Sprintf("%x", raw)
 
 	h.mu.Lock()
 	if last, ok := h.seen[key]; ok && time.Since(last) < 5*time.Minute {
@@ -78,23 +80,14 @@ func (h *EventIntentHandler) handle(topic string, payload []byte) {
 		string(payload),
 	)
 	if err != nil {
-		// Backpressure: schedule a retry in 5 minutes.
-		slog.Warn("events: intent create failed (backpressure), will retry later",
-			"topic", topic, "err", err)
-		if in != nil {
-			in.NextCheck = time.Now().Add(5 * time.Minute)
-			if updateErr := h.intentStore.Update(ctx, in); updateErr != nil {
-				slog.Warn("events: intent update after backpressure failed",
-					"topic", topic, "err", updateErr)
-			}
-		}
+		slog.Warn("events: intent create failed, dropping event", "topic", topic, "error", err)
 		return
 	}
 
 	// Trigger immediate scheduling by setting NextCheck to now.
 	in.NextCheck = time.Now()
 	if err := h.intentStore.Update(ctx, in); err != nil {
-		slog.Warn("events: intent update next_check failed", "topic", topic, "err", err)
+		slog.Warn("events: intent update failed", "topic", topic, "error", err)
 	}
 }
 

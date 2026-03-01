@@ -4,6 +4,7 @@ package events
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -37,6 +38,10 @@ type Bus struct {
 	highTopics []string // exact topic names that block-enqueue rather than drop
 	workerN    int
 	wg         sync.WaitGroup
+
+	done     chan struct{} // closed by Stop to unblock blocked high-priority publishers
+	stopOnce sync.Once
+	cancel   context.CancelFunc // cancels the context passed to workers
 }
 
 // Compile-time assertion that *Bus satisfies EventBus.
@@ -58,12 +63,16 @@ func NewEventBus(queueSize, workerCount int, highPriorityTopics []string) *Bus {
 		queue:      make(chan Event, queueSize),
 		highTopics: hp,
 		workerN:    workerCount,
+		done:       make(chan struct{}),
 	}
 }
 
 // Start launches the worker goroutines. Workers run until ctx is cancelled and
-// remaining queued events are drained. Call Stop() to wait for shutdown.
+// remaining queued events are drained. Call Stop() to trigger shutdown and
+// wait for all workers to finish.
 func (b *Bus) Start(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
+	b.cancel = cancel
 	for i := 0; i < b.workerN; i++ {
 		b.wg.Add(1)
 		go func() {
@@ -91,9 +100,16 @@ func (b *Bus) Start(ctx context.Context) {
 	}
 }
 
-// Stop waits for all workers to finish. It must be called after the context
-// passed to Start has been cancelled.
+// Stop cancels the worker context, unblocks any blocked high-priority
+// publishers, and waits for all workers to finish draining the queue.
+// It is safe to call Stop multiple times.
 func (b *Bus) Stop() {
+	b.stopOnce.Do(func() {
+		if b.cancel != nil {
+			b.cancel()
+		}
+		close(b.done) // unblock any goroutine blocked on a high-priority publish
+	})
 	b.wg.Wait()
 }
 
@@ -105,7 +121,11 @@ func (b *Bus) Publish(topic string, payload []byte) error {
 	ev := Event{Topic: topic, Payload: payload}
 
 	if b.isHighPriority(topic) {
-		b.queue <- ev
+		select {
+		case b.queue <- ev:
+		case <-b.done:
+			return fmt.Errorf("events: bus stopped")
+		}
 		return nil
 	}
 

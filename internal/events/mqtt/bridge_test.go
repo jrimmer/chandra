@@ -2,6 +2,8 @@ package mqtt_test
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,6 +15,20 @@ import (
 	"github.com/jrimmer/chandra/internal/events"
 	mqttbridge "github.com/jrimmer/chandra/internal/events/mqtt"
 )
+
+// freePort returns a free TCP port on loopback by briefly listening on :0
+// and immediately closing the listener. There is a small TOCTOU window, but
+// for test purposes this is acceptable.
+func freePort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+	return port
+}
 
 // newBus returns a started Bus and registers cleanup.
 func newBus(t *testing.T) *events.Bus {
@@ -103,6 +119,10 @@ func TestBridge_External_CompilationSmoke(t *testing.T) {
 // TestBridge_ForwardsToBus exercises the embedded broker end-to-end:
 // start bridge → connect paho client → publish → verify event on bus.
 func TestBridge_ForwardsToBus(t *testing.T) {
+	port := freePort(t)
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	brokerURL := fmt.Sprintf("tcp://%s", addr)
+
 	bus := newBus(t)
 
 	var received atomic.Int32
@@ -113,7 +133,7 @@ func TestBridge_ForwardsToBus(t *testing.T) {
 
 	cfg := config.MQTTConfig{
 		Mode:   "embedded",
-		Bind:   "127.0.0.1:18833",
+		Bind:   addr,
 		Topics: []string{"sensor/#"},
 	}
 
@@ -132,7 +152,7 @@ func TestBridge_ForwardsToBus(t *testing.T) {
 	// Publish via paho to the embedded broker.
 	pahoCfg := config.MQTTConfig{
 		Mode:   "external",
-		Broker: "tcp://127.0.0.1:18833",
+		Broker: brokerURL,
 		Topics: []string{},
 	}
 	publisherBus := events.NewEventBus(4, 1, nil)
