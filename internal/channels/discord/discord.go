@@ -56,6 +56,9 @@ type Discord struct {
 
 	mu         sync.RWMutex
 	msgChanMap map[string]string // messageID → channelID for React lookups
+	msgIDOrder []string          // insertion-order tracking for FIFO eviction
+	msgChanMax int               // maximum entries in msgChanMap (default 10000)
+	done       bool              // true after shutdown; guards against send on closed channel
 }
 
 // NewDiscord constructs a Discord adapter with the given bot token and the list
@@ -81,6 +84,8 @@ func NewDiscord(token string, channelIDs []string) (*Discord, error) {
 		session:    session,
 		channelIDs: allowed,
 		msgChanMap: make(map[string]string),
+		msgIDOrder: make([]string, 0, 100),
+		msgChanMax: 10000,
 	}, nil
 }
 
@@ -101,9 +106,18 @@ func (d *Discord) Listen(ctx context.Context) (<-chan channels.InboundMessage, e
 			return
 		}
 
-		// Record messageID → channelID mapping for React.
+		// Record messageID → channelID mapping for React, capping at msgChanMax
+		// via FIFO eviction to prevent unbounded memory growth.
 		d.mu.Lock()
-		d.msgChanMap[m.ID] = m.ChannelID
+		if _, exists := d.msgChanMap[m.ID]; !exists {
+			d.msgChanMap[m.ID] = m.ChannelID
+			d.msgIDOrder = append(d.msgIDOrder, m.ID)
+			for len(d.msgIDOrder) > d.msgChanMax {
+				oldest := d.msgIDOrder[0]
+				d.msgIDOrder = d.msgIDOrder[1:]
+				delete(d.msgChanMap, oldest)
+			}
+		}
 		d.mu.Unlock()
 
 		meta := make(map[string]string)
@@ -127,9 +141,18 @@ func (d *Discord) Listen(ctx context.Context) (<-chan channels.InboundMessage, e
 			Metadata:       meta,
 		}
 
+		// Guard against sending on a closed channel after shutdown.
+		d.mu.RLock()
+		isDone := d.done
+		d.mu.RUnlock()
+		if isDone {
+			return
+		}
+
 		select {
 		case out <- msg:
 		case <-ctx.Done():
+			return
 		}
 	})
 
@@ -143,10 +166,14 @@ func (d *Discord) Listen(ctx context.Context) (<-chan channels.InboundMessage, e
 	}
 
 	// Close the output channel when the context is done, and close the
-	// Discord WebSocket connection.
+	// Discord WebSocket connection. Setting done=true under the write lock
+	// before closing prevents handler goroutines from sending on a closed channel.
 	go func() {
 		<-ctx.Done()
 		_ = d.session.Close()
+		d.mu.Lock()
+		d.done = true
+		d.mu.Unlock()
 		close(out)
 	}()
 
