@@ -1,8 +1,6 @@
 package store
 
 import (
-	"encoding/binary"
-	"math"
 	"path/filepath"
 	"testing"
 
@@ -45,7 +43,7 @@ func TestMigrate_CreatesVecTable(t *testing.T) {
 	// Verify memory_embeddings virtual table is queryable
 	_, err = db.DB().Exec(
 		"INSERT INTO memory_embeddings(id, embedding) VALUES (?, ?)",
-		"test-id", serializeFloat32(make([]float32, 1536)),
+		"test-id", SerializeFloat32(make([]float32, 1536)),
 	)
 	assert.NoError(t, err, "should be able to insert into memory_embeddings")
 }
@@ -63,11 +61,3 @@ func TestMigrate_Idempotent(t *testing.T) {
 	assert.NoError(t, err, "migrate should be idempotent")
 }
 
-// serializeFloat32 converts []float32 to little-endian bytes for sqlite-vec.
-func serializeFloat32(v []float32) []byte {
-	buf := make([]byte, len(v)*4)
-	for i, f := range v {
-		binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(f))
-	}
-	return buf
-}

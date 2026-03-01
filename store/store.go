@@ -36,6 +36,17 @@ func NewDB(path string) (*Store, error) {
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
 
+	// Verify critical PRAGMAs took effect.
+	var journalMode string
+	if err := db.QueryRow("PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("check journal mode: %w", err)
+	}
+	if journalMode != "wal" {
+		db.Close()
+		return nil, fmt.Errorf("expected WAL journal mode, got %q", journalMode)
+	}
+
 	// SQLite WAL mode supports concurrent readers but serializes writes.
 	// Limit write connections to prevent "database is locked" errors.
 	db.SetMaxOpenConns(1)

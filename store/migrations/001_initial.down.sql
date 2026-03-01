@@ -1,7 +1,6 @@
 DROP TABLE IF EXISTS confirmations;
 DROP TABLE IF EXISTS action_rollups;
 DROP TABLE IF EXISTS action_log;
-DROP TABLE IF EXISTS sessions;
 DROP TABLE IF EXISTS tool_telemetry;
 DROP TABLE IF EXISTS relationship_state;
 DROP TABLE IF EXISTS user_profile;
@@ -10,3 +9,4 @@ DROP TABLE IF EXISTS intents;
 DROP TABLE IF EXISTS memory_embeddings;
 DROP TABLE IF EXISTS memory_entries;
 DROP TABLE IF EXISTS episodes;
+DROP TABLE IF EXISTS sessions;

@@ -1,7 +1,20 @@
--- Episodic memory
+-- Sessions must be created BEFORE tables that reference it
+CREATE TABLE sessions (
+    id              TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    channel_id      TEXT NOT NULL,
+    user_id         TEXT NOT NULL,
+    started_at      INTEGER NOT NULL,
+    last_active     INTEGER NOT NULL,
+    meta            TEXT
+);
+CREATE INDEX idx_sessions_conversation ON sessions(conversation_id, last_active DESC);
+CREATE INDEX idx_sessions_channel ON sessions(channel_id, last_active DESC);
+
+-- Episodic memory (references sessions)
 CREATE TABLE episodes (
     id          TEXT PRIMARY KEY,
-    session_id  TEXT NOT NULL,
+    session_id  TEXT NOT NULL REFERENCES sessions(id),
     role        TEXT NOT NULL,
     content     TEXT NOT NULL,
     timestamp   INTEGER NOT NULL,
@@ -10,7 +23,7 @@ CREATE TABLE episodes (
 CREATE INDEX idx_episodes_session ON episodes(session_id, timestamp DESC);
 CREATE INDEX idx_episodes_timestamp ON episodes(timestamp DESC);
 
--- Semantic memory
+-- Semantic memory (no FK to sessions — memories outlive sessions)
 CREATE TABLE memory_entries (
     id          TEXT PRIMARY KEY,
     content     TEXT NOT NULL,
@@ -20,13 +33,13 @@ CREATE TABLE memory_entries (
 );
 CREATE INDEX idx_memory_timestamp ON memory_entries(timestamp DESC);
 
--- sqlite-vec virtual table (1536 dims = text-embedding-3-small default)
+-- sqlite-vec virtual table (vec0 does NOT support REFERENCES constraints)
 CREATE VIRTUAL TABLE memory_embeddings USING vec0(
     id          TEXT PRIMARY KEY,
     embedding   FLOAT[1536]
 );
 
--- Intent store
+-- Intent store (standalone)
 CREATE TABLE intents (
     id           TEXT PRIMARY KEY,
     description  TEXT NOT NULL,
@@ -58,10 +71,10 @@ CREATE TABLE user_profile (
     notes        TEXT
 );
 
--- Relationship state
+-- Relationship state (references agent and user profiles)
 CREATE TABLE relationship_state (
-    agent_id           TEXT NOT NULL,
-    user_id            TEXT NOT NULL,
+    agent_id           TEXT NOT NULL REFERENCES agent_profile(id),
+    user_id            TEXT NOT NULL REFERENCES user_profile(id),
     trust_level        INTEGER NOT NULL DEFAULT 3,
     communication_style TEXT NOT NULL DEFAULT 'concise',
     ongoing_context    TEXT,
@@ -69,7 +82,7 @@ CREATE TABLE relationship_state (
     PRIMARY KEY (agent_id, user_id)
 );
 
--- Tool telemetry
+-- Tool telemetry (standalone)
 CREATE TABLE tool_telemetry (
     id           TEXT PRIMARY KEY,
     tool_name    TEXT NOT NULL,
@@ -81,34 +94,21 @@ CREATE TABLE tool_telemetry (
 );
 CREATE INDEX idx_telemetry_tool ON tool_telemetry(tool_name, called_at DESC);
 
--- Sessions
-CREATE TABLE sessions (
-    id              TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL,
-    channel_id      TEXT NOT NULL,
-    user_id         TEXT NOT NULL,
-    started_at      INTEGER NOT NULL,
-    last_active     INTEGER NOT NULL,
-    meta            TEXT
-);
-CREATE INDEX idx_sessions_conversation ON sessions(conversation_id, last_active DESC);
-CREATE INDEX idx_sessions_channel ON sessions(channel_id, last_active DESC);
-
--- Action log
+-- Action log (session_id nullable — scheduled/background turns have no user session)
 CREATE TABLE action_log (
     id           TEXT PRIMARY KEY,
     timestamp    INTEGER NOT NULL,
     type         TEXT NOT NULL,
     summary      TEXT NOT NULL,
     details      TEXT,
-    session_id   TEXT,
+    session_id   TEXT REFERENCES sessions(id),
     tool_name    TEXT,
     success      INTEGER
 );
 CREATE INDEX idx_action_log_time ON action_log(timestamp DESC);
 CREATE INDEX idx_action_log_type ON action_log(type, timestamp DESC);
 
--- Action rollups
+-- Action rollups (standalone)
 CREATE TABLE action_rollups (
     id           TEXT PRIMARY KEY,
     period       TEXT NOT NULL,
@@ -121,10 +121,10 @@ CREATE TABLE action_rollups (
 );
 CREATE INDEX idx_rollups_period ON action_rollups(period, start_time DESC);
 
--- Confirmation queue
+-- Confirmation queue (references sessions)
 CREATE TABLE confirmations (
     id           TEXT PRIMARY KEY,
-    session_id   TEXT NOT NULL,
+    session_id   TEXT NOT NULL REFERENCES sessions(id),
     tool_name    TEXT NOT NULL,
     parameters   TEXT NOT NULL,
     description  TEXT NOT NULL,
