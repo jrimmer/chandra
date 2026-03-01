@@ -353,17 +353,14 @@ func TestAgentLoop_Run_MaxRoundsExceeded(t *testing.T) {
 	ep := &mockEpisodic{}
 	sem := &mockSemantic{}
 	al := &mockActionLog{}
-	// Executor returns different tool names each time to avoid injection detection.
-	callCount := 0
 	ex := &mockExecutor{}
 	bgt := &mockBudget{}
 
-	// Provider always returns a tool call (never stops).
+	// Provider always returns a tool call (never produces a final text response).
 	p := &mockProvider{}
 	for i := 0; i < 10; i++ {
 		p.responses = append(p.responses, toolCallResponse("web.search", map[string]string{"q": "x"}))
 	}
-	_ = callCount
 
 	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 3, 20)
 	loop := agent.NewLoop(cfg)
@@ -608,6 +605,100 @@ func TestAgentLoop_PromptInjection_RejectsVerbatimToolCall(t *testing.T) {
 		}
 	}
 }
+
+// TestAgentLoop_Run_MessageOrdering verifies that after the first tool-call
+// round the assistant message (with ToolCalls set) appears in history BEFORE
+// the tool result message. This matches the OpenAI/Anthropic API contract.
+func TestAgentLoop_Run_MessageOrdering(t *testing.T) {
+	ep := &mockEpisodic{}
+	sem := &mockSemantic{}
+	al := &mockActionLog{}
+	ex := &mockExecutor{
+		results: []pkg.ToolResult{{ID: "tc-1", Content: "result data"}},
+	}
+	bgt := &mockBudget{}
+
+	// capturingProvider records every CompletionRequest it receives so we can
+	// inspect the message history on the second call.
+	var captured []capturedReq
+
+	p := &mockCapturingProvider{
+		captured: &captured,
+		responses: []provider.CompletionResponse{
+			toolCallResponse("file.read", map[string]string{"path": "/etc/hosts"}),
+			textResponse("Here is the file content."),
+		},
+	}
+
+	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5, 20)
+	loop := agent.NewLoop(cfg)
+
+	// Use a message that does NOT contain the tool name to avoid injection guard.
+	resp, err := loop.Run(context.Background(), newTestSession(), newTestMessage("read the hosts file"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp != "Here is the file content." {
+		t.Errorf("unexpected response: %q", resp)
+	}
+
+	// We expect exactly 2 provider calls: round 1 (tool call) and round 2 (text).
+	if len(captured) != 2 {
+		t.Fatalf("expected 2 provider calls, got %d", len(captured))
+	}
+
+	// On the second call, the message history must have the assistant message
+	// (with ToolCalls) immediately preceding the tool result message.
+	secondCallMsgs := captured[1].messages
+	n := len(secondCallMsgs)
+	if n < 2 {
+		t.Fatalf("second call message history too short: %d messages", n)
+	}
+	// The second-to-last message must be the assistant message with tool calls.
+	assistantPos := n - 2
+	toolPos := n - 1
+	if secondCallMsgs[assistantPos].Role != "assistant" {
+		t.Errorf("expected messages[%d].Role == \"assistant\", got %q", assistantPos, secondCallMsgs[assistantPos].Role)
+	}
+	if len(secondCallMsgs[assistantPos].ToolCalls) == 0 {
+		t.Errorf("expected assistant message at index %d to carry ToolCalls, but ToolCalls is empty", assistantPos)
+	}
+	if secondCallMsgs[toolPos].Role != "tool" {
+		t.Errorf("expected messages[%d].Role == \"tool\", got %q", toolPos, secondCallMsgs[toolPos].Role)
+	}
+}
+
+// mockCapturingProvider captures each CompletionRequest and delegates to preset responses.
+type mockCapturingProvider struct {
+	captured  *[]capturedReq
+	responses []provider.CompletionResponse
+	callIdx   int
+}
+
+type capturedReq struct {
+	messages []provider.Message
+}
+
+func (m *mockCapturingProvider) Complete(_ context.Context, req provider.CompletionRequest) (provider.CompletionResponse, error) {
+	// Deep-copy the messages slice so later mutations don't affect the snapshot.
+	msgs := make([]provider.Message, len(req.Messages))
+	copy(msgs, req.Messages)
+	*m.captured = append(*m.captured, capturedReq{messages: msgs})
+
+	if m.callIdx >= len(m.responses) {
+		return m.responses[len(m.responses)-1], nil
+	}
+	resp := m.responses[m.callIdx]
+	m.callIdx++
+	return resp, nil
+}
+
+func (m *mockCapturingProvider) CountTokens(_ []provider.Message, _ []pkg.ToolDef) (int, error) {
+	return 10, nil
+}
+func (m *mockCapturingProvider) ModelID() string { return "mock-capturing" }
+
+var _ provider.Provider = (*mockCapturingProvider)(nil)
 
 func TestAgentLoop_ToolAllowlist_PerChannel(t *testing.T) {
 	ep := &mockEpisodic{}

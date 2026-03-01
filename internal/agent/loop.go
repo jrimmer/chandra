@@ -88,8 +88,6 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 	if err != nil {
 		slog.Warn("agent/loop: failed to load recent episodes", "session_id", session.ID, "error", err)
 	}
-	_, _ = l.cfg.Memory.Identity().User() // load identity context (ignore error — non-fatal)
-
 	// Step 2: Retrieve semantic memories relevant to the incoming message.
 	semanticMems, err := l.cfg.Memory.Semantic().QueryText(ctx, msg.Content, 5)
 	if err != nil {
@@ -102,7 +100,7 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 
 	// Step 4: Apply tool allowlist.
 	availableTools := l.cfg.Registry.All()
-	if allowed, ok := l.cfg.ToolAllowlist[session.ChannelID]; ok && len(l.cfg.ToolAllowlist) > 0 {
+	if allowed, ok := l.cfg.ToolAllowlist[session.ChannelID]; ok {
 		availableTools = filterTools(availableTools, allowed)
 	}
 
@@ -113,7 +111,8 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 	}
 
 	// Build initial messages: assembled context + current user message.
-	messages := window.Messages
+	// Copy the slice to avoid sharing the backing array with window.Messages.
+	messages := append([]provider.Message(nil), window.Messages...)
 	messages = append(messages, provider.Message{Role: "user", Content: msg.Content})
 
 	// Step 5 & 6: Call provider, enter tool-call loop.
@@ -143,7 +142,13 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 		// Filter tool calls: prompt injection defense + allowlist.
 		safeToolCalls := l.filterSafeToolCalls(resp.ToolCalls, msg.Content, session.ChannelID)
 
-		// Execute safe tool calls in parallel.
+		// Append assistant message with tool calls to history BEFORE tool results.
+		// The API requires assistant message (with ToolCalls) to precede the tool result messages.
+		assistantMsg := resp.Message
+		assistantMsg.ToolCalls = resp.ToolCalls
+		messages = append(messages, assistantMsg)
+
+		// Execute safe tool calls in parallel and append results.
 		if len(safeToolCalls) > 0 {
 			results := l.cfg.Executor.Execute(ctx, safeToolCalls)
 			for i, result := range results {
@@ -165,11 +170,6 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 				})
 			}
 		}
-
-		// Append assistant message with tool calls to history.
-		assistantMsg := resp.Message
-		assistantMsg.ToolCalls = resp.ToolCalls
-		messages = append(messages, assistantMsg)
 	}
 
 	// If we exhausted MaxRounds without a final text response, return graceful message.

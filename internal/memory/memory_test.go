@@ -77,30 +77,18 @@ func TestMemoryFacade_Accessors(t *testing.T) {
 
 	mem := memory.New(ep, sem, in, id)
 
-	if mem.Episodic() == nil {
-		t.Error("Episodic() returned nil")
-	}
 	if mem.Episodic() != ep {
 		t.Error("Episodic() returned wrong store")
 	}
 
-	if mem.Semantic() == nil {
-		t.Error("Semantic() returned nil")
-	}
 	if mem.Semantic() != sem {
 		t.Error("Semantic() returned wrong store")
 	}
 
-	if mem.Intent() == nil {
-		t.Error("Intent() returned nil")
-	}
 	if mem.Intent() != in {
 		t.Error("Intent() returned wrong store")
 	}
 
-	if mem.Identity() == nil {
-		t.Error("Identity() returned nil")
-	}
 	if mem.Identity() != id {
 		t.Error("Identity() returned wrong store")
 	}
