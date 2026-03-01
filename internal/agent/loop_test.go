@@ -198,6 +198,9 @@ func (m *mockActionLog) Query(_ context.Context, _, _ time.Time, _ actionlog.Act
 	return nil, nil
 }
 func (m *mockActionLog) Recent(_ context.Context, _ int) ([]*actionlog.Action, error) { return nil, nil }
+func (m *mockActionLog) GetByID(_ context.Context, _ string) (*actionlog.Action, error) {
+	return nil, nil
+}
 func (m *mockActionLog) GenerateHourlyRollup(_ context.Context, _ time.Time) (*actionlog.Rollup, error) {
 	return nil, nil
 }

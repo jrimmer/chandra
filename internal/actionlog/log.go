@@ -48,6 +48,7 @@ type Log interface {
 	Record(ctx context.Context, sessionID string, actionType ActionType, details string) error
 	Query(ctx context.Context, since, until time.Time, actionType ActionType) ([]*Action, error)
 	Recent(ctx context.Context, limit int) ([]*Action, error)
+	GetByID(ctx context.Context, id string) (*Action, error)
 	GenerateHourlyRollup(ctx context.Context, hour time.Time) (*Rollup, error)
 	GetRollup(ctx context.Context, period string, periodStart time.Time) (*Rollup, error)
 }
@@ -126,6 +127,35 @@ func (l *ActionLog) Recent(ctx context.Context, limit int) ([]*Action, error) {
 	defer rows.Close()
 
 	return scanActions(rows)
+}
+
+// GetByID retrieves a single action by its ID. Returns an error wrapping
+// sql.ErrNoRows (via fmt.Errorf) if no matching row exists.
+func (l *ActionLog) GetByID(ctx context.Context, id string) (*Action, error) {
+	var a Action
+	var ts int64
+	var sessionID sql.NullString
+	var details sql.NullString
+
+	err := l.db.QueryRowContext(ctx,
+		`SELECT id, type, session_id, details, timestamp FROM action_log WHERE id = ?`,
+		id,
+	).Scan(&a.ID, &a.Type, &sessionID, &details, &ts)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("actionlog: action %q not found", id)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("actionlog: get by id: %w", err)
+	}
+
+	a.Timestamp = time.Unix(ts, 0).UTC()
+	if sessionID.Valid {
+		a.SessionID = sessionID.String
+	}
+	if details.Valid {
+		a.Details = details.String
+	}
+	return &a, nil
 }
 
 // GenerateHourlyRollup aggregates all actions for the clock-hour starting at

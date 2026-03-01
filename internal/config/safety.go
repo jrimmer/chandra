@@ -87,13 +87,17 @@ func (w *SafeWriter) WriteConfig(content []byte) error {
 	// Step 3: write to tmp file.
 	tmpPath := w.tmpPath()
 	if err := os.WriteFile(tmpPath, content, 0600); err != nil {
+		// Auto-rollback: restore backup.1 → config.toml so the config
+		// directory is not left without a config file.
+		_ = os.Rename(w.backupPath(1), cfgPath)
 		return fmt.Errorf("config/safety: write tmp file: %w", err)
 	}
 
 	// Step 4: atomic rename tmp → config.toml.
 	if err := os.Rename(tmpPath, cfgPath); err != nil {
-		// Try to remove the orphaned tmp file.
+		// Auto-rollback: restore backup.1 → config.toml.
 		_ = os.Remove(tmpPath)
+		_ = os.Rename(w.backupPath(1), cfgPath)
 		return fmt.Errorf("config/safety: atomic rename: %w", err)
 	}
 

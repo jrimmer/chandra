@@ -259,15 +259,14 @@ func run(ctx context.Context, safeMode bool) error {
 	// -------------------------------------------------------------------
 	// Step 11: Start Discord channel listener (if configured).
 	//
-	// agentLoop and sessionMgr are declared as interfaces here so that the
-	// Discord goroutine can close over them. Both are assigned in Steps 12-13
-	// before the daemon enters the blocking select (Step 14), so the goroutine
-	// sees the final values when it first processes a message.
+	// dc.Listen is called here to start the websocket and return a buffered
+	// channel. The processing goroutine is launched after Steps 12 and 13
+	// so that sessionMgr and agentLoop are fully assigned before the goroutine
+	// reads them — satisfying the Go memory model without any extra sync.
 	// -------------------------------------------------------------------
-	var agentLoop agent.AgentLoop
-	var sessionMgr agent.Manager
-
 	var discordChannel channels.Channel
+	var discordCh <-chan channels.InboundMessage
+	var discordDC *discord.Discord
 	discordConfigured := !safeMode && cfg.Channels.Discord != nil && cfg.Channels.Discord.Token != ""
 	if discordConfigured {
 		slog.Info("chandrad: starting Discord channel listener")
@@ -275,22 +274,52 @@ func run(ctx context.Context, safeMode bool) error {
 		if dcErr != nil {
 			return fmt.Errorf("chandrad: discord init: %w", dcErr)
 		}
-		discordCh, listenErr := dc.Listen(ctx)
+		ch, listenErr := dc.Listen(ctx)
 		if listenErr != nil {
 			return fmt.Errorf("chandrad: discord listen: %w", listenErr)
 		}
 		discordChannel = dc
+		discordCh = ch
+		discordDC = dc
+	} else {
+		slog.Info("chandrad: Discord not configured, skipping")
+	}
 
-		// Process inbound messages in a goroutine via agent loop.
-		// The goroutine exits when discordCh is closed (on ctx cancellation).
-		// agentLoop and sessionMgr are nil until Steps 12-13 complete, but
-		// the goroutine only processes messages after startup finishes.
+	// -------------------------------------------------------------------
+	// Step 12: Start session manager.
+	// -------------------------------------------------------------------
+	sessionTimeout := 30 * time.Minute
+	mgr, smErr := agent.NewManager(db, sessionTimeout)
+	if smErr != nil {
+		return fmt.Errorf("chandrad: init session manager: %w", smErr)
+	}
+	mgr.Start(ctx)
+	var sessionMgr agent.Manager = mgr
+	slog.Info("chandrad: session manager started")
+
+	// -------------------------------------------------------------------
+	// Step 13: Initialize agent loop (if provider available).
+	// -------------------------------------------------------------------
+	var agentLoop agent.AgentLoop
+	if chatProvider != nil {
+		loopCfg := agent.LoopConfig{
+			Provider:  chatProvider,
+			Memory:    mem,
+			Budget:    budgetMgr,
+			Registry:  registry,
+			Executor:  executor,
+			ActionLog: alog,
+			MaxRounds: cfg.Agent.MaxToolRounds,
+		}
+		agentLoop = agent.NewLoop(loopCfg)
+		slog.Info("chandrad: agent loop initialized")
+	}
+
+	// Now launch the Discord processing goroutine — sessionMgr and agentLoop
+	// are fully assigned above so the goroutine sees their final values.
+	if discordConfigured && discordDC != nil {
 		go func() {
 			for msg := range discordCh {
-				if sessionMgr == nil {
-					slog.Warn("chandrad: discord: session manager not ready, dropping message")
-					continue
-				}
 				sess, sessErr := sessionMgr.GetOrCreate(ctx, msg.ChannelID, msg.UserID)
 				if sessErr != nil {
 					slog.Error("chandrad: discord: session error", "err", sessErr)
@@ -305,45 +334,13 @@ func run(ctx context.Context, safeMode bool) error {
 					slog.Error("chandrad: agent loop error", "err", runErr)
 					continue
 				}
-				_ = dc.Send(ctx, channels.OutboundMessage{
+				_ = discordDC.Send(ctx, channels.OutboundMessage{
 					ChannelID: msg.ChannelID,
 					Content:   resp,
 					ReplyToID: msg.ID,
 				})
 			}
 		}()
-	} else {
-		slog.Info("chandrad: Discord not configured, skipping")
-	}
-
-	// -------------------------------------------------------------------
-	// Step 12: Start session manager.
-	// -------------------------------------------------------------------
-	sessionTimeout := 30 * time.Minute
-	mgr, smErr := agent.NewManager(db, sessionTimeout)
-	if smErr != nil {
-		return fmt.Errorf("chandrad: init session manager: %w", smErr)
-	}
-	mgr.Start(ctx)
-	// Assign to the interface variable so the Discord goroutine can use it.
-	sessionMgr = mgr
-	slog.Info("chandrad: session manager started")
-
-	// -------------------------------------------------------------------
-	// Step 13: Initialize agent loop (if provider available).
-	// -------------------------------------------------------------------
-	if chatProvider != nil {
-		loopCfg := agent.LoopConfig{
-			Provider:  chatProvider,
-			Memory:    mem,
-			Budget:    budgetMgr,
-			Registry:  registry,
-			Executor:  executor,
-			ActionLog: alog,
-			MaxRounds: cfg.Agent.MaxToolRounds,
-		}
-		agentLoop = agent.NewLoop(loopCfg)
-		slog.Info("chandrad: agent loop initialized")
 	}
 
 	// -------------------------------------------------------------------
@@ -361,10 +358,9 @@ func run(ctx context.Context, safeMode bool) error {
 
 	socketPath := resolveSocketPath()
 	if err := apiServer.Start(socketPath); err != nil {
-		slog.Warn("chandrad: API server start failed", "err", err, "socket", socketPath)
-	} else {
-		slog.Info("chandrad: API server listening", "socket", socketPath)
+		return fmt.Errorf("chandrad: API server start: %w", err)
 	}
+	slog.Info("chandrad: API server listening", "socket", socketPath)
 
 	// -------------------------------------------------------------------
 	// Step 14: Block until context is cancelled.
@@ -742,16 +738,11 @@ func registerHandlers(
 		if p.ID == "" {
 			return nil, fmt.Errorf("log.drill: id is required")
 		}
-		recent, err := alog.Recent(ctx, 1000)
+		entry, err := alog.GetByID(ctx, p.ID)
 		if err != nil {
-			return nil, fmt.Errorf("log.drill: %w", err)
+			return nil, err
 		}
-		for _, a := range recent {
-			if a.ID == p.ID {
-				return a, nil
-			}
-		}
-		return nil, fmt.Errorf("log.drill: action %q not found", p.ID)
+		return entry, nil
 	})
 
 	// confirm.approve — params: {id string}
