@@ -33,15 +33,16 @@ func TestEventBus_PublishSubscribe(t *testing.T) {
 	var received []string
 	var mu sync.Mutex
 
-	unsub := bus.Subscribe("test/topic", func(topic string, payload []byte) {
+	unsub := bus.Subscribe("test/topic", func(_ context.Context, ev events.Event) error {
 		mu.Lock()
-		received = append(received, string(payload))
+		received = append(received, string(ev.Payload))
 		mu.Unlock()
+		return nil
 	})
 	defer unsub()
 
-	require.NoError(t, bus.Publish("test/topic", []byte("hello")))
-	require.NoError(t, bus.Publish("test/topic", []byte("world")))
+	require.NoError(t, bus.Publish(context.Background(), events.Event{Topic: "test/topic", Payload: []byte("hello"), Source: "internal"}))
+	require.NoError(t, bus.Publish(context.Background(), events.Event{Topic: "test/topic", Payload: []byte("world"), Source: "internal"}))
 
 	assert.Eventually(t, func() bool {
 		mu.Lock()
@@ -58,8 +59,9 @@ func TestEventBus_WildcardHash(t *testing.T) {
 	bus := startBus(t, 64, 2, nil)
 
 	var count atomic.Int32
-	unsub := bus.Subscribe("homelab/#", func(topic string, payload []byte) {
+	unsub := bus.Subscribe("homelab/#", func(_ context.Context, _ events.Event) error {
 		count.Add(1)
+		return nil
 	})
 	defer unsub()
 
@@ -71,7 +73,7 @@ func TestEventBus_WildcardHash(t *testing.T) {
 		"homelab/a/b/c/deep",
 	}
 	for _, topic := range topics {
-		require.NoError(t, bus.Publish(topic, []byte("data")))
+		require.NoError(t, bus.Publish(context.Background(), events.Event{Topic: topic, Payload: []byte("data"), Source: "internal"}))
 	}
 
 	assert.Eventually(t, func() bool {
@@ -79,7 +81,7 @@ func TestEventBus_WildcardHash(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond)
 
 	// This should NOT match (different root).
-	require.NoError(t, bus.Publish("other/sensor/temp", []byte("data")))
+	require.NoError(t, bus.Publish(context.Background(), events.Event{Topic: "other/sensor/temp", Payload: []byte("data"), Source: "internal"}))
 
 	// Give a moment to ensure the non-matching event doesn't increment.
 	time.Sleep(50 * time.Millisecond)
@@ -90,23 +92,24 @@ func TestEventBus_WildcardPlus(t *testing.T) {
 	bus := startBus(t, 64, 2, nil)
 
 	var matched atomic.Int32
-	unsub := bus.Subscribe("homelab/+/temp", func(topic string, payload []byte) {
+	unsub := bus.Subscribe("homelab/+/temp", func(_ context.Context, _ events.Event) error {
 		matched.Add(1)
+		return nil
 	})
 	defer unsub()
 
 	// Should match: exactly one segment between homelab/ and /temp.
-	require.NoError(t, bus.Publish("homelab/sensor/temp", []byte("data")))
-	require.NoError(t, bus.Publish("homelab/living-room/temp", []byte("data")))
+	require.NoError(t, bus.Publish(context.Background(), events.Event{Topic: "homelab/sensor/temp", Payload: []byte("data"), Source: "internal"}))
+	require.NoError(t, bus.Publish(context.Background(), events.Event{Topic: "homelab/living-room/temp", Payload: []byte("data"), Source: "internal"}))
 
 	assert.Eventually(t, func() bool {
 		return matched.Load() == 2
 	}, 2*time.Second, 10*time.Millisecond)
 
 	// Should NOT match: two segments in the middle.
-	require.NoError(t, bus.Publish("homelab/a/b/temp", []byte("data")))
+	require.NoError(t, bus.Publish(context.Background(), events.Event{Topic: "homelab/a/b/temp", Payload: []byte("data"), Source: "internal"}))
 	// Should NOT match: wrong last segment.
-	require.NoError(t, bus.Publish("homelab/sensor/humidity", []byte("data")))
+	require.NoError(t, bus.Publish(context.Background(), events.Event{Topic: "homelab/sensor/humidity", Payload: []byte("data"), Source: "internal"}))
 
 	time.Sleep(50 * time.Millisecond)
 	assert.Equal(t, int32(2), matched.Load())
@@ -116,18 +119,19 @@ func TestEventBus_Unsubscribe(t *testing.T) {
 	bus := startBus(t, 64, 2, nil)
 
 	var count atomic.Int32
-	unsub := bus.Subscribe("test/topic", func(topic string, payload []byte) {
+	unsub := bus.Subscribe("test/topic", func(_ context.Context, _ events.Event) error {
 		count.Add(1)
+		return nil
 	})
 
-	require.NoError(t, bus.Publish("test/topic", []byte("before")))
+	require.NoError(t, bus.Publish(context.Background(), events.Event{Topic: "test/topic", Payload: []byte("before"), Source: "internal"}))
 	assert.Eventually(t, func() bool {
 		return count.Load() == 1
 	}, 2*time.Second, 10*time.Millisecond)
 
 	// Unsubscribe, then publish again — count must not change.
 	unsub()
-	require.NoError(t, bus.Publish("test/topic", []byte("after")))
+	require.NoError(t, bus.Publish(context.Background(), events.Event{Topic: "test/topic", Payload: []byte("after"), Source: "internal"}))
 
 	time.Sleep(50 * time.Millisecond)
 	assert.Equal(t, int32(1), count.Load())
@@ -138,15 +142,16 @@ func TestEventBus_WorkerPool(t *testing.T) {
 	bus := startBus(t, 64, 2, nil)
 
 	var count atomic.Int32
-	unsub := bus.Subscribe("work/#", func(topic string, payload []byte) {
+	unsub := bus.Subscribe("work/#", func(_ context.Context, _ events.Event) error {
 		// Simulate a tiny bit of work.
 		time.Sleep(5 * time.Millisecond)
 		count.Add(1)
+		return nil
 	})
 	defer unsub()
 
 	for i := 0; i < 10; i++ {
-		require.NoError(t, bus.Publish("work/item", []byte("payload")))
+		require.NoError(t, bus.Publish(context.Background(), events.Event{Topic: "work/item", Payload: []byte("payload"), Source: "internal"}))
 	}
 
 	assert.Eventually(t, func() bool {
@@ -169,20 +174,21 @@ func TestEventBus_QueueFull_DropsLowPriority(t *testing.T) {
 	}()
 
 	var processed atomic.Int32
-	bus.Subscribe("sensor/#", func(topic string, payload []byte) {
+	bus.Subscribe("sensor/#", func(_ context.Context, _ events.Event) error {
 		<-block // block until test releases
 		processed.Add(1)
+		return nil
 	})
 
 	// First publish fills the queue slot; the worker picks it up and blocks.
 	// Give the worker a moment to dequeue the first item before flooding.
-	require.NoError(t, bus.Publish("sensor/temp", []byte("1")))
+	require.NoError(t, bus.Publish(context.Background(), events.Event{Topic: "sensor/temp", Payload: []byte("1"), Source: "internal"}))
 	time.Sleep(20 * time.Millisecond) // let worker dequeue and enter block
 
 	// Now publish many events; queue size=1, worker blocked. These should be
 	// dropped (non-blocking path returns nil without error).
 	for i := 0; i < 10; i++ {
-		_ = bus.Publish("sensor/temp", []byte("dropped"))
+		_ = bus.Publish(context.Background(), events.Event{Topic: "sensor/temp", Payload: []byte("dropped"), Source: "internal"})
 	}
 
 	// Release the blocked worker and stop.

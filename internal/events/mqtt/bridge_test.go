@@ -126,8 +126,9 @@ func TestBridge_ForwardsToBus(t *testing.T) {
 	bus := newBus(t)
 
 	var received atomic.Int32
-	unsub := bus.Subscribe("sensor/#", func(topic string, payload []byte) {
+	unsub := bus.Subscribe("sensor/#", func(_ context.Context, _ events.Event) error {
 		received.Add(1)
+		return nil
 	})
 	defer unsub()
 

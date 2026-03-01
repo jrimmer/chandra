@@ -56,7 +56,7 @@ func TestEventIntentHandler_CreatesIntent(t *testing.T) {
 	is := newTestIntentStore(t)
 	bus, _ := busWithHandler(t, is, []string{"homelab/#"})
 
-	require.NoError(t, bus.Publish("homelab/sensor/temp", []byte(`{"value":25.3}`)))
+	require.NoError(t, bus.Publish(context.Background(), events.Event{Topic: "homelab/sensor/temp", Payload: []byte(`{"value":25.3}`), Source: "mqtt"}))
 
 	// Wait for the intent to appear in the store.
 	var intents []*intent.Intent
@@ -80,10 +80,10 @@ func TestEventIntentHandler_Deduplication(t *testing.T) {
 	payload := []byte(`{"temp":20}`)
 
 	// Publish twice with the same topic+payload.
-	require.NoError(t, bus.Publish("sensor/temp", payload))
+	require.NoError(t, bus.Publish(context.Background(), events.Event{Topic: "sensor/temp", Payload: payload, Source: "mqtt"}))
 	// Small delay to ensure first event is processed before second.
 	time.Sleep(50 * time.Millisecond)
-	require.NoError(t, bus.Publish("sensor/temp", payload))
+	require.NoError(t, bus.Publish(context.Background(), events.Event{Topic: "sensor/temp", Payload: payload, Source: "mqtt"}))
 
 	// Wait long enough for both to potentially be processed.
 	time.Sleep(200 * time.Millisecond)
@@ -106,7 +106,7 @@ func TestEventIntentHandler_BackpressureDelay(t *testing.T) {
 	handler := events.NewEventIntentHandler(mock, bus, []string{"alert/#"})
 	handler.Start()
 
-	require.NoError(t, bus.Publish("alert/fire", []byte("evacuate")))
+	require.NoError(t, bus.Publish(context.Background(), events.Event{Topic: "alert/fire", Payload: []byte("evacuate"), Source: "internal"}))
 
 	// Wait for the handler to receive and attempt Create.
 	assert.Eventually(t, func() bool {

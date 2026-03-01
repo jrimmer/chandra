@@ -8,26 +8,35 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/oklog/ulid/v2"
 )
 
 // EventBus is the publish/subscribe contract for the internal event bus.
 type EventBus interface {
-	Publish(topic string, payload []byte) error
-	Subscribe(pattern string, handler func(topic string, payload []byte)) (unsubscribe func())
+	Publish(ctx context.Context, event Event) error
+	Subscribe(topic string, handler Handler) (unsubscribe func())
 }
 
-// Event carries a topic and raw payload through the internal bus.
+// Event carries a topic, raw payload, source, and timestamp through the
+// internal bus.
 type Event struct {
-	Topic   string
-	Payload []byte
+	Topic     string
+	Payload   []byte
+	Source    string    // "mqtt" | "internal" | "scheduler"
+	Timestamp time.Time
 }
+
+// Handler is the callback signature for event subscribers. Returning an error
+// causes the bus to log the failure but does not stop delivery to other
+// subscribers.
+type Handler func(ctx context.Context, event Event) error
 
 // subscription holds a handler registered against a topic pattern.
 type subscription struct {
 	pattern string
-	handler func(topic string, payload []byte)
+	handler Handler
 }
 
 // Bus is a buffered, worker-pool-backed event bus.
@@ -83,13 +92,13 @@ func (b *Bus) Start(ctx context.Context) {
 					if !ok {
 						return
 					}
-					b.deliver(ev)
+					b.deliver(ctx, ev)
 				case <-ctx.Done():
 					// Drain remaining events before exiting.
 					for {
 						select {
 						case ev := <-b.queue:
-							b.deliver(ev)
+							b.deliver(ctx, ev)
 						default:
 							return
 						}
@@ -114,13 +123,16 @@ func (b *Bus) Stop() {
 }
 
 // Publish enqueues an event for delivery to matching subscribers.
+// If ev.Timestamp is zero it is set to time.Now() before enqueueing.
 // For high-priority topics, Publish blocks until space is available.
 // For all other topics, if the queue is full the event is silently dropped
 // (a warning is logged) and nil is returned.
-func (b *Bus) Publish(topic string, payload []byte) error {
-	ev := Event{Topic: topic, Payload: payload}
+func (b *Bus) Publish(_ context.Context, ev Event) error {
+	if ev.Timestamp.IsZero() {
+		ev.Timestamp = time.Now()
+	}
 
-	if b.isHighPriority(topic) {
+	if b.isHighPriority(ev.Topic) {
 		select {
 		case b.queue <- ev:
 		case <-b.done:
@@ -132,7 +144,7 @@ func (b *Bus) Publish(topic string, payload []byte) error {
 	select {
 	case b.queue <- ev:
 	default:
-		slog.Warn("events: queue full, dropping low-priority event", "topic", topic)
+		slog.Warn("events: queue full, dropping low-priority event", "topic", ev.Topic)
 	}
 	return nil
 }
@@ -144,7 +156,7 @@ func (b *Bus) Publish(topic string, payload []byte) error {
 //
 // The returned function removes the subscription; calling it more than once
 // is safe.
-func (b *Bus) Subscribe(pattern string, handler func(topic string, payload []byte)) (unsubscribe func()) {
+func (b *Bus) Subscribe(pattern string, handler Handler) (unsubscribe func()) {
 	id := ulid.Make().String()
 	b.subs.Store(id, &subscription{pattern: pattern, handler: handler})
 	return func() { b.subs.Delete(id) }
@@ -161,11 +173,14 @@ func (b *Bus) isHighPriority(topic string) bool {
 }
 
 // deliver calls all matching subscribers within the calling worker goroutine.
-func (b *Bus) deliver(ev Event) {
+// Handler errors are logged but do not stop delivery to other subscribers.
+func (b *Bus) deliver(ctx context.Context, ev Event) {
 	b.subs.Range(func(_, val any) bool {
 		sub := val.(*subscription)
 		if matchTopic(sub.pattern, ev.Topic) {
-			sub.handler(ev.Topic, ev.Payload)
+			if err := sub.handler(ctx, ev); err != nil {
+				slog.Warn("events: handler error", "topic", ev.Topic, "err", err)
+			}
 		}
 		return true
 	})

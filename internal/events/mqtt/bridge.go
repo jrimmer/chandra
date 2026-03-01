@@ -20,12 +20,13 @@ import (
 	"github.com/mochi-mqtt/server/v2/packets"
 
 	"github.com/jrimmer/chandra/internal/config"
+	"github.com/jrimmer/chandra/internal/events"
 )
 
 // EventBus is the subset of the internal event bus required by the bridge.
 // It matches the EventBus interface in internal/events.
 type EventBus interface {
-	Publish(topic string, payload []byte) error
+	Publish(ctx context.Context, event events.Event) error
 }
 
 // Bridge manages the lifecycle of the MQTT broker/client connection and
@@ -161,7 +162,12 @@ func (b *bridge) startEmbedded(ctx context.Context) error {
 	for _, pattern := range b.cfg.Topics {
 		p := pattern // capture
 		if err := srv.Subscribe(p, 1, func(_ *mochi.Client, _ packets.Subscription, pk packets.Packet) {
-			if err := b.bus.Publish(pk.TopicName, pk.Payload); err != nil {
+			ev := events.Event{
+				Topic:   pk.TopicName,
+				Payload: pk.Payload,
+				Source:  "mqtt",
+			}
+			if err := b.bus.Publish(context.Background(), ev); err != nil {
 				slog.Warn("mqtt bridge: forward to bus failed", "topic", pk.TopicName, "err", err)
 			}
 		}); err != nil {
@@ -272,7 +278,12 @@ func (b *bridge) subscribeTopics(client pahomqtt.Client) {
 	for _, topic := range b.cfg.Topics {
 		t := topic
 		tok := client.Subscribe(t, 0, func(_ pahomqtt.Client, msg pahomqtt.Message) {
-			if err := b.bus.Publish(msg.Topic(), msg.Payload()); err != nil {
+			ev := events.Event{
+				Topic:   msg.Topic(),
+				Payload: msg.Payload(),
+				Source:  "mqtt",
+			}
+			if err := b.bus.Publish(context.Background(), ev); err != nil {
 				slog.Warn("mqtt bridge: forward to bus failed",
 					"topic", msg.Topic(), "err", err)
 			}

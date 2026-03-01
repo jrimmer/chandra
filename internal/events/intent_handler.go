@@ -58,37 +58,36 @@ func (h *EventIntentHandler) Stop() {
 }
 
 // handle is the event callback. It deduplicates, then creates an Intent.
-func (h *EventIntentHandler) handle(topic string, payload []byte) {
-	raw := sha256.Sum256([]byte(fmt.Sprintf("%s:%s", topic, string(payload))))
+func (h *EventIntentHandler) handle(ctx context.Context, ev Event) error {
+	raw := sha256.Sum256([]byte(fmt.Sprintf("%s:%s", ev.Topic, string(ev.Payload))))
 	key := fmt.Sprintf("%x", raw)
 
 	h.mu.Lock()
 	if last, ok := h.seen[key]; ok && time.Since(last) < 5*time.Minute {
 		h.mu.Unlock()
-		return
+		return nil
 	}
 	h.seen[key] = time.Now()
 	// Prune stale dedup entries to prevent unbounded growth.
 	h.pruneSeenLocked()
 	h.mu.Unlock()
 
-	ctx := context.Background()
-
 	in, err := h.intentStore.Create(ctx,
-		fmt.Sprintf("event:%s", topic),
+		fmt.Sprintf("event:%s", ev.Topic),
 		"event",
-		string(payload),
+		string(ev.Payload),
 	)
 	if err != nil {
-		slog.Warn("events: intent create failed, dropping event", "topic", topic, "error", err)
-		return
+		slog.Warn("events: intent create failed, dropping event", "topic", ev.Topic, "error", err)
+		return nil
 	}
 
 	// Trigger immediate scheduling by setting NextCheck to now.
 	in.NextCheck = time.Now()
 	if err := h.intentStore.Update(ctx, in); err != nil {
-		slog.Warn("events: intent update failed", "topic", topic, "error", err)
+		slog.Warn("events: intent update failed", "topic", ev.Topic, "error", err)
 	}
+	return nil
 }
 
 // pruneSeenLocked removes dedup entries older than 5 minutes.
