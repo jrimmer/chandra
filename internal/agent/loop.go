@@ -40,8 +40,8 @@ type LoopConfig struct {
 	Executor      tools.Executor
 	ActionLog     actionlog.ActionLog
 	Channel       channels.Channel
-	MaxRounds     int               // max tool call rounds per turn (default: 5)
-	MaxQueueDepth int               // max pending scheduled turns before shedding (default: 20)
+	Sessions      Manager             // required for RunScheduled; if nil, scheduled turns are dropped
+	MaxRounds     int                 // max tool call rounds per turn (default: 5)
 	ToolAllowlist map[string][]string // channelID → allowed tool names (nil = all allowed)
 }
 
@@ -60,24 +60,16 @@ var _ AgentLoop = (*agentLoop)(nil)
 
 // agentLoop implements AgentLoop.
 type agentLoop struct {
-	cfg   LoopConfig
-	queue chan scheduler.ScheduledTurn
+	cfg LoopConfig
 }
 
-// NewLoop constructs an AgentLoop with the provided configuration. Defaults are
-// applied for MaxRounds (5) and MaxQueueDepth (20) when zero or negative.
+// NewLoop constructs an AgentLoop with the provided configuration.
+// A default MaxRounds of 5 is applied when zero or negative.
 func NewLoop(cfg LoopConfig) AgentLoop {
 	if cfg.MaxRounds <= 0 {
 		cfg.MaxRounds = 5
 	}
-	queueDepth := cfg.MaxQueueDepth
-	if queueDepth <= 0 {
-		queueDepth = 20
-	}
-	return &agentLoop{
-		cfg:   cfg,
-		queue: make(chan scheduler.ScheduledTurn, queueDepth),
-	}
+	return &agentLoop{cfg: cfg}
 }
 
 // Run implements AgentLoop.Run: the 9-step think-act-remember cycle.
@@ -239,25 +231,34 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 	return finalResponse, nil
 }
 
-// RunScheduled implements AgentLoop.RunScheduled with backpressure shedding.
-func (l *agentLoop) RunScheduled(_ context.Context, turn scheduler.ScheduledTurn) error {
-	if len(l.queue) >= cap(l.queue) {
-		slog.Warn("agent/loop: queue full, dropping scheduled turn",
+// RunScheduled implements AgentLoop.RunScheduled.
+// It converts the ScheduledTurn into a synthetic InboundMessage and drives it
+// through the standard Run() path. If Sessions is not configured the turn is
+// dropped with a warning.
+func (l *agentLoop) RunScheduled(ctx context.Context, turn scheduler.ScheduledTurn) error {
+	if l.cfg.Sessions == nil {
+		slog.Warn("agent/loop: RunScheduled: no session manager configured; dropping scheduled turn",
 			"intent_id", turn.IntentID,
-			"session_id", turn.SessionID,
 		)
 		return nil
 	}
-	// In v1 we directly drop if the channel is already at capacity.
-	// For a zero-capacity queue, cap(l.queue)==0 so the check above always drops.
-	select {
-	case l.queue <- turn:
-	default:
-		slog.Warn("agent/loop: queue full (non-blocking send dropped), dropping scheduled turn",
-			"intent_id", turn.IntentID,
-		)
+
+	sess, err := l.cfg.Sessions.GetOrCreate(ctx, turn.SessionID, "scheduler", "system")
+	if err != nil {
+		return fmt.Errorf("agent/loop: RunScheduled: get session: %w", err)
 	}
-	return nil
+
+	msg := channels.InboundMessage{
+		ConversationID: turn.SessionID,
+		UserID:         "system",
+		ChannelID:      "scheduler",
+		Content:        turn.Prompt,
+		Timestamp:      time.Now().UTC(),
+		Meta:           map[string]any{"intent_id": turn.IntentID, "scheduled": true},
+	}
+
+	_, runErr := l.Run(ctx, sess, msg)
+	return runErr
 }
 
 // filterSafeToolCalls removes tool calls that fail the prompt-injection check

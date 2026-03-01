@@ -243,7 +243,6 @@ func newTestConfig(
 	bgt agent.ContextBudget,
 	allowlist map[string][]string,
 	maxRounds int,
-	maxQueue int,
 ) agent.LoopConfig {
 	mem := memory.New(ep, sem, &mockIntent{}, &mockIdentity{})
 	reg := &mockRegistry{}
@@ -252,8 +251,6 @@ func newTestConfig(
 	if maxRounds == 0 {
 		maxRounds = 5
 	}
-	// Note: maxQueue == 0 is intentionally forwarded to NewLoop, which applies the
-	// spec-mandated default of 20. Pass a non-zero value to override that default.
 
 	return agent.LoopConfig{
 		Provider:      p,
@@ -264,7 +261,6 @@ func newTestConfig(
 		ActionLog:     al,
 		Channel:       ch,
 		MaxRounds:     maxRounds,
-		MaxQueueDepth: maxQueue,
 		ToolAllowlist: allowlist,
 	}
 }
@@ -297,7 +293,7 @@ func TestAgentLoop_Run_BasicTurn(t *testing.T) {
 	bgt := &mockBudget{}
 	p := &mockProvider{responses: []provider.CompletionResponse{textResponse("Hello!")}}
 
-	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5, 20)
+	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5)
 	loop := agent.NewLoop(cfg)
 
 	resp, err := loop.Run(context.Background(), newTestSession(), newTestMessage("hi"))
@@ -328,7 +324,7 @@ func TestAgentLoop_Run_WithToolCalls(t *testing.T) {
 		},
 	}
 
-	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5, 20)
+	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5)
 	loop := agent.NewLoop(cfg)
 
 	resp, err := loop.Run(context.Background(), newTestSession(), newTestMessage("search for test"))
@@ -357,7 +353,7 @@ func TestAgentLoop_Run_MaxRoundsExceeded(t *testing.T) {
 		p.responses = append(p.responses, toolCallResponse("web.search", map[string]string{"q": "x"}))
 	}
 
-	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 3, 20)
+	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 3)
 	loop := agent.NewLoop(cfg)
 
 	resp, err := loop.Run(context.Background(), newTestSession(), newTestMessage("keep searching"))
@@ -383,7 +379,7 @@ func TestAgentLoop_Run_SemanticStorage_Reinforcement(t *testing.T) {
 	bgt := &mockBudget{}
 	p := &mockProvider{responses: []provider.CompletionResponse{textResponse("Got it.")}}
 
-	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5, 20)
+	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5)
 	loop := agent.NewLoop(cfg)
 
 	// Short message (< 50 tokens) but has reinforcement keyword.
@@ -409,7 +405,7 @@ func TestAgentLoop_Run_SemanticStorage_SkipsShort(t *testing.T) {
 	bgt := &mockBudget{}
 	p := &mockProvider{responses: []provider.CompletionResponse{textResponse("Hey there!")}}
 
-	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5, 20)
+	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5)
 	loop := agent.NewLoop(cfg)
 
 	// Very short message, no reinforcement keywords.
@@ -435,7 +431,7 @@ func TestAgentLoop_Run_MemoryRetrieval(t *testing.T) {
 	bgt := &mockBudget{}
 	p := &mockProvider{responses: []provider.CompletionResponse{textResponse("Response using memory.")}}
 
-	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5, 20)
+	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5)
 	loop := agent.NewLoop(cfg)
 
 	_, err := loop.Run(context.Background(), newTestSession(), newTestMessage("tell me something"))
@@ -448,7 +444,9 @@ func TestAgentLoop_Run_MemoryRetrieval(t *testing.T) {
 	}
 }
 
-func TestAgentLoop_Backpressure(t *testing.T) {
+func TestAgentLoop_RunScheduled_NoSessionManager(t *testing.T) {
+	// When Sessions is nil (not configured), RunScheduled must drop the turn
+	// gracefully and return nil — no panic, no error.
 	ep := &mockEpisodic{}
 	sem := &mockSemantic{}
 	al := &mockActionLog{}
@@ -456,8 +454,8 @@ func TestAgentLoop_Backpressure(t *testing.T) {
 	bgt := &mockBudget{}
 	p := &mockProvider{responses: []provider.CompletionResponse{textResponse("ok")}}
 
-	// MaxQueueDepth = 1: fill the queue with one turn, then the next must be dropped.
-	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5, 1)
+	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5)
+	// Sessions intentionally left nil.
 	loop := agent.NewLoop(cfg)
 
 	turn := scheduler.ScheduledTurn{
@@ -466,16 +464,9 @@ func TestAgentLoop_Backpressure(t *testing.T) {
 		SessionID: "sess-001",
 	}
 
-	// First call fills the queue.
 	err := loop.RunScheduled(context.Background(), turn)
 	if err != nil {
-		t.Errorf("expected nil error on first RunScheduled, got: %v", err)
-	}
-
-	// Second call must be dropped (queue is full) — still returns nil, not an error.
-	err = loop.RunScheduled(context.Background(), turn)
-	if err != nil {
-		t.Errorf("expected nil error on backpressure drop, got: %v", err)
+		t.Errorf("expected nil when Sessions is nil, got: %v", err)
 	}
 }
 
@@ -494,7 +485,7 @@ func TestAgentLoop_ActionLog_ToolCall(t *testing.T) {
 		},
 	}
 
-	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5, 20)
+	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5)
 	loop := agent.NewLoop(cfg)
 
 	_, err := loop.Run(context.Background(), newTestSession(), newTestMessage("find x"))
@@ -523,7 +514,7 @@ func TestAgentLoop_ActionLog_OutboundMessage(t *testing.T) {
 	bgt := &mockBudget{}
 	p := &mockProvider{responses: []provider.CompletionResponse{textResponse("Hello!")}}
 
-	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5, 20)
+	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5)
 	loop := agent.NewLoop(cfg)
 
 	_, err := loop.Run(context.Background(), newTestSession(), newTestMessage("hello"))
@@ -551,7 +542,7 @@ func TestAgentLoop_ActionLog_Error(t *testing.T) {
 	bgt := &mockBudget{}
 	p := &mockProvider{err: errors.New("provider failure")}
 
-	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5, 20)
+	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5)
 	loop := agent.NewLoop(cfg)
 
 	_, err := loop.Run(context.Background(), newTestSession(), newTestMessage("hello"))
@@ -585,7 +576,7 @@ func TestAgentLoop_PromptInjection_RejectsVerbatimToolCall(t *testing.T) {
 		},
 	}
 
-	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5, 20)
+	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5)
 	loop := agent.NewLoop(cfg)
 
 	// User message contains the tool name verbatim — prompt injection.
@@ -625,7 +616,7 @@ func TestAgentLoop_Run_MessageOrdering(t *testing.T) {
 		},
 	}
 
-	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5, 20)
+	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5)
 	loop := agent.NewLoop(cfg)
 
 	// Use a message that does NOT contain the tool name to avoid injection guard.
@@ -714,7 +705,7 @@ func TestAgentLoop_ToolAllowlist_PerChannel(t *testing.T) {
 		"chan-001": {"homeassistant.get_state"},
 	}
 
-	cfg := newTestConfig(p, ep, sem, al, ex, bgt, allowlist, 5, 20)
+	cfg := newTestConfig(p, ep, sem, al, ex, bgt, allowlist, 5)
 	loop := agent.NewLoop(cfg)
 
 	sess := newTestSession()

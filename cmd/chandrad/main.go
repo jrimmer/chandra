@@ -328,6 +328,7 @@ func run(ctx context.Context, safeMode bool) error {
 			Executor:  executor,
 			ActionLog: alog,
 			Channel:   discordChannel, // G18: wire Discord channel for response sending
+			Sessions:  sessionMgr,     // required for RunScheduled to process turns
 			MaxRounds: cfg.Agent.MaxToolRounds,
 		}
 		agentLoop = agent.NewLoop(loopCfg)
