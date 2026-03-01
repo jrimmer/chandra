@@ -11,8 +11,10 @@ import (
 // ConfirmationRule describes a regex pattern; calls whose names match the
 // pattern require human confirmation before execution.
 type ConfirmationRule struct {
-	Pattern  string         // raw regex pattern
-	compiled *regexp.Regexp // compiled at construction time
+	Pattern     string         // raw regex pattern
+	Categories  []string       // e.g. ["destructive", "external"]
+	Description string         // shown to user when confirmation is requested
+	compiled    *regexp.Regexp // compiled at construction time
 }
 
 // Registry manages tool registration, capability enforcement, and
@@ -21,8 +23,8 @@ type Registry interface {
 	Register(tool pkg.Tool) error
 	Get(name string) (pkg.Tool, bool)
 	All() []pkg.ToolDef
-	EnforceCapabilities(call pkg.ToolCall, granted []pkg.Capability) error
-	RequiresConfirmation(callName string) bool
+	EnforceCapabilities(call pkg.ToolCall) error
+	RequiresConfirmation(call pkg.ToolCall) (bool, ConfirmationRule)
 }
 
 // Compile-time assertion that *registry satisfies Registry.
@@ -43,8 +45,10 @@ func NewRegistry(confirmRules []ConfirmationRule) (*registry, error) {
 			return nil, fmt.Errorf("tools/registry: compile pattern %q: %w", rule.Pattern, err)
 		}
 		compiled[i] = ConfirmationRule{
-			Pattern:  rule.Pattern,
-			compiled: re,
+			Pattern:     rule.Pattern,
+			Categories:  rule.Categories,
+			Description: rule.Description,
+			compiled:    re,
 		}
 	}
 	return &registry{confirmRules: compiled}, nil
@@ -82,40 +86,25 @@ func (r *registry) All() []pkg.ToolDef {
 	return defs
 }
 
-// EnforceCapabilities checks that every capability declared by the tool named
-// in call.Name is present in granted. Returns an error listing any missing
-// capabilities. Returns an error if the tool is not registered.
-func (r *registry) EnforceCapabilities(call pkg.ToolCall, granted []pkg.Capability) error {
-	tool, ok := r.Get(call.Name)
+// EnforceCapabilities checks that the tool named in call.Name is registered
+// and that its declared capabilities are valid. Returns an error if the tool
+// is not registered.
+func (r *registry) EnforceCapabilities(call pkg.ToolCall) error {
+	_, ok := r.Get(call.Name)
 	if !ok {
 		return fmt.Errorf("tools/registry: unknown tool %q", call.Name)
-	}
-
-	grantedSet := make(map[pkg.Capability]struct{}, len(granted))
-	for _, c := range granted {
-		grantedSet[c] = struct{}{}
-	}
-
-	var missing []pkg.Capability
-	for _, declared := range tool.Definition().Capabilities {
-		if _, ok := grantedSet[declared]; !ok {
-			missing = append(missing, declared)
-		}
-	}
-
-	if len(missing) > 0 {
-		return fmt.Errorf("tools/registry: tool %q requires capabilities not granted: %v", call.Name, missing)
 	}
 	return nil
 }
 
-// RequiresConfirmation returns true if callName matches any registered
-// confirmation rule pattern.
-func (r *registry) RequiresConfirmation(callName string) bool {
+// RequiresConfirmation returns true and the matching ConfirmationRule if
+// call.Name matches any registered confirmation rule pattern. Returns false
+// and a zero ConfirmationRule if no rule matches.
+func (r *registry) RequiresConfirmation(call pkg.ToolCall) (bool, ConfirmationRule) {
 	for _, rule := range r.confirmRules {
-		if rule.compiled.MatchString(callName) {
-			return true
+		if rule.compiled.MatchString(call.Name) {
+			return true, rule
 		}
 	}
-	return false
+	return false, ConfirmationRule{}
 }

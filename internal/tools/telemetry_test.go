@@ -39,8 +39,10 @@ func TestReliability_ComputesFromTelemetry(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "my.tool", rel.ToolName)
-	assert.Equal(t, 100, rel.SampleCount)
+	assert.Equal(t, 100, rel.SampleSize)
 	assert.InDelta(t, 0.9, rel.SuccessRate, 0.001)
+	assert.NotEmpty(t, rel.LastError)
+	assert.False(t, rel.LastErrorAt.IsZero())
 }
 
 func TestReliability_30DayWindow(t *testing.T) {
@@ -75,7 +77,7 @@ func TestReliability_30DayWindow(t *testing.T) {
 	rel, err := tools.ComputeReliability(ctx, db, "window.tool")
 	require.NoError(t, err)
 
-	assert.Equal(t, 10, rel.SampleCount, "old rows should be excluded")
+	assert.Equal(t, 10, rel.SampleSize, "old rows should be excluded")
 	assert.InDelta(t, 1.0, rel.SuccessRate, 0.001, "only recent successes should be included")
 }
 
@@ -99,11 +101,11 @@ func TestReliability_LatencyPercentiles(t *testing.T) {
 	rel, err := tools.ComputeReliability(ctx, db, "perc.tool")
 	require.NoError(t, err)
 
-	assert.Equal(t, 100, rel.SampleCount)
+	assert.Equal(t, 100, rel.SampleSize)
 	// P50 of 1..100 = 50 (nearest-rank: ceil(0.50*100)=50, sorted[49]=50).
-	assert.Equal(t, int64(50), rel.P50LatencyMs)
+	assert.Equal(t, 50, rel.P50LatencyMs)
 	// P95 of 1..100 = 95 (nearest-rank: ceil(0.95*100)=95, sorted[94]=95).
-	assert.Equal(t, int64(95), rel.P95LatencyMs)
+	assert.Equal(t, 95, rel.P95LatencyMs)
 }
 
 func TestReliability_EmptyData(t *testing.T) {
@@ -113,6 +115,6 @@ func TestReliability_EmptyData(t *testing.T) {
 	rel, err := tools.ComputeReliability(ctx, db, "nonexistent.tool")
 	require.NoError(t, err)
 	assert.Equal(t, "nonexistent.tool", rel.ToolName)
-	assert.Equal(t, 0, rel.SampleCount)
-	assert.Equal(t, 0.0, rel.SuccessRate)
+	assert.Equal(t, 0, rel.SampleSize)
+	assert.Equal(t, float32(0.0), rel.SuccessRate)
 }

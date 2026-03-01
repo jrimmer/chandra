@@ -144,8 +144,8 @@ func run(ctx context.Context, safeMode bool) error {
 	// -------------------------------------------------------------------
 	// Step 5: Initialize tool registry + built-in skills.
 	// -------------------------------------------------------------------
-	confirmPatterns := buildConfirmPatterns(cfg.Tools.ConfirmationPatterns)
-	registry, err := tools.NewRegistry(confirmPatterns)
+	confirmRules := buildConfirmRules(cfg.Tools.ConfirmationRules)
+	registry, err := tools.NewRegistry(confirmRules)
 	if err != nil {
 		return fmt.Errorf("chandrad: init tool registry: %w", err)
 	}
@@ -478,11 +478,15 @@ func resolveSocketPath() string {
 	return filepath.Join(home, ".local", "share", "chandra", "chandrad.sock")
 }
 
-// buildConfirmPatterns converts string patterns from config to ConfirmationRule slice.
-func buildConfirmPatterns(patterns []string) []tools.ConfirmationRule {
-	rules := make([]tools.ConfirmationRule, 0, len(patterns))
-	for _, p := range patterns {
-		rules = append(rules, tools.ConfirmationRule{Pattern: p})
+// buildConfirmRules converts ConfirmationRuleConfig entries from config to ConfirmationRule slice.
+func buildConfirmRules(cfgRules []config.ConfirmationRuleConfig) []tools.ConfirmationRule {
+	rules := make([]tools.ConfirmationRule, 0, len(cfgRules))
+	for _, r := range cfgRules {
+		rules = append(rules, tools.ConfirmationRule{
+			Pattern:     r.Pattern,
+			Categories:  r.Categories,
+			Description: r.Description,
+		})
 	}
 	return rules
 }

@@ -104,11 +104,13 @@ var _ tools.Executor = (*noopExecutor)(nil)
 
 type noopRegistry struct{}
 
-func (r *noopRegistry) Register(_ pkg.Tool) error                                    { return nil }
-func (r *noopRegistry) Get(_ string) (pkg.Tool, bool)                                { return nil, false }
-func (r *noopRegistry) All() []pkg.ToolDef                                           { return nil }
-func (r *noopRegistry) EnforceCapabilities(_ pkg.ToolCall, _ []pkg.Capability) error { return nil }
-func (r *noopRegistry) RequiresConfirmation(_ string) bool                            { return false }
+func (r *noopRegistry) Register(_ pkg.Tool) error                                          { return nil }
+func (r *noopRegistry) Get(_ string) (pkg.Tool, bool)                                      { return nil, false }
+func (r *noopRegistry) All() []pkg.ToolDef                                                 { return nil }
+func (r *noopRegistry) EnforceCapabilities(_ pkg.ToolCall) error                           { return nil }
+func (r *noopRegistry) RequiresConfirmation(_ pkg.ToolCall) (bool, tools.ConfirmationRule) {
+	return false, tools.ConfirmationRule{}
+}
 
 var _ tools.Registry = (*noopRegistry)(nil)
 

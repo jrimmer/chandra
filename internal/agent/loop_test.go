@@ -146,11 +146,13 @@ var _ agent.ContextBudget = (*mockBudget)(nil)
 // mockRegistry returns an empty tool list.
 type mockRegistry struct{}
 
-func (m *mockRegistry) Register(_ pkg.Tool) error                                    { return nil }
-func (m *mockRegistry) Get(_ string) (pkg.Tool, bool)                                { return nil, false }
-func (m *mockRegistry) All() []pkg.ToolDef                                           { return nil }
-func (m *mockRegistry) EnforceCapabilities(_ pkg.ToolCall, _ []pkg.Capability) error { return nil }
-func (m *mockRegistry) RequiresConfirmation(_ string) bool                            { return false }
+func (m *mockRegistry) Register(_ pkg.Tool) error                                         { return nil }
+func (m *mockRegistry) Get(_ string) (pkg.Tool, bool)                                     { return nil, false }
+func (m *mockRegistry) All() []pkg.ToolDef                                                { return nil }
+func (m *mockRegistry) EnforceCapabilities(_ pkg.ToolCall) error                          { return nil }
+func (m *mockRegistry) RequiresConfirmation(_ pkg.ToolCall) (bool, tools.ConfirmationRule) {
+	return false, tools.ConfirmationRule{}
+}
 
 var _ tools.Registry = (*mockRegistry)(nil)
 

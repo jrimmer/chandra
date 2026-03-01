@@ -11,10 +11,12 @@ import (
 // ToolReliability summarises the reliability of a tool over the past 30 days.
 type ToolReliability struct {
 	ToolName     string
-	SuccessRate  float64
-	P50LatencyMs int64
-	P95LatencyMs int64
-	SampleCount  int
+	SuccessRate  float32
+	P50LatencyMs int
+	P95LatencyMs int
+	LastError    string
+	LastErrorAt  time.Time
+	SampleSize   int
 }
 
 // ComputeReliability queries tool_telemetry for the named tool and computes
@@ -64,18 +66,34 @@ func ComputeReliability(ctx context.Context, db *sql.DB, toolName string) (ToolR
 	p50 := percentile(latencies, 50)
 	p95 := percentile(latencies, 95)
 
-	return ToolReliability{
+	rel := ToolReliability{
 		ToolName:     toolName,
-		SuccessRate:  float64(successes) / float64(total),
+		SuccessRate:  float32(successes) / float32(total),
 		P50LatencyMs: p50,
 		P95LatencyMs: p95,
-		SampleCount:  total,
-	}, nil
+		SampleSize:   total,
+	}
+
+	// Query for the most recent error.
+	var lastErrText string
+	var lastErrAtMs int64
+	errRow := db.QueryRowContext(ctx,
+		`SELECT error, called_at FROM tool_telemetry
+		 WHERE tool_name = ? AND success = 0 AND error != ''
+		 ORDER BY called_at DESC LIMIT 1`,
+		toolName,
+	)
+	if scanErr := errRow.Scan(&lastErrText, &lastErrAtMs); scanErr == nil {
+		rel.LastError = lastErrText
+		rel.LastErrorAt = time.UnixMilli(lastErrAtMs)
+	}
+
+	return rel, nil
 }
 
 // percentile returns the value at the given percentile (0-100) in a sorted
 // ascending slice. Uses nearest-rank method.
-func percentile(sorted []int64, p int) int64 {
+func percentile(sorted []int64, p int) int {
 	n := len(sorted)
 	if n == 0 {
 		return 0
@@ -88,5 +106,5 @@ func percentile(sorted []int64, p int) int64 {
 	if rank > n {
 		rank = n
 	}
-	return sorted[rank-1]
+	return int(sorted[rank-1])
 }

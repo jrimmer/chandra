@@ -90,26 +90,9 @@ func TestRegistry_EnforceCapabilities_AllowsDeclared(t *testing.T) {
 	require.NoError(t, reg.Register(tool))
 
 	call := pkg.ToolCall{ID: "c1", Name: "ha.read"}
-	granted := []pkg.Capability{pkg.CapMemoryRead, pkg.CapNetworkOut, pkg.CapFileRead}
 
-	err = reg.EnforceCapabilities(call, granted)
+	err = reg.EnforceCapabilities(call)
 	assert.NoError(t, err)
-}
-
-func TestRegistry_EnforceCapabilities_RejectsUndeclared(t *testing.T) {
-	reg, err := tools.NewRegistry(nil)
-	require.NoError(t, err)
-
-	// Tool requires file:write but only memory:read is granted.
-	tool := newStubTool("ha.write", pkg.CapFileWrite)
-	require.NoError(t, reg.Register(tool))
-
-	call := pkg.ToolCall{ID: "c2", Name: "ha.write"}
-	granted := []pkg.Capability{pkg.CapMemoryRead}
-
-	err = reg.EnforceCapabilities(call, granted)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "file:write")
 }
 
 func TestRegistry_EnforceCapabilities_UnknownToolReturnsError(t *testing.T) {
@@ -117,21 +100,26 @@ func TestRegistry_EnforceCapabilities_UnknownToolReturnsError(t *testing.T) {
 	require.NoError(t, err)
 
 	call := pkg.ToolCall{ID: "c3", Name: "unknown.tool"}
-	err = reg.EnforceCapabilities(call, nil)
+	err = reg.EnforceCapabilities(call)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown tool")
 }
 
 func TestRegistry_RequiresConfirmation_MatchesPattern(t *testing.T) {
 	rules := []tools.ConfirmationRule{
-		{Pattern: ".*delete.*"},
+		{Pattern: ".*delete.*", Categories: []string{"destructive"}, Description: "Deletes an entity"},
 	}
 	reg, err := tools.NewRegistry(rules)
 	require.NoError(t, err)
 
 	require.NoError(t, reg.Register(newStubTool("homeassistant.delete_entity")))
 
-	assert.True(t, reg.RequiresConfirmation("homeassistant.delete_entity"))
+	call := pkg.ToolCall{ID: "c4", Name: "homeassistant.delete_entity"}
+	matched, rule := reg.RequiresConfirmation(call)
+	assert.True(t, matched)
+	assert.Equal(t, ".*delete.*", rule.Pattern)
+	assert.Equal(t, []string{"destructive"}, rule.Categories)
+	assert.Equal(t, "Deletes an entity", rule.Description)
 }
 
 func TestRegistry_RequiresConfirmation_NoMatch(t *testing.T) {
@@ -143,7 +131,10 @@ func TestRegistry_RequiresConfirmation_NoMatch(t *testing.T) {
 
 	require.NoError(t, reg.Register(newStubTool("homeassistant.get_state")))
 
-	assert.False(t, reg.RequiresConfirmation("homeassistant.get_state"))
+	call := pkg.ToolCall{ID: "c5", Name: "homeassistant.get_state"}
+	matched, rule := reg.RequiresConfirmation(call)
+	assert.False(t, matched)
+	assert.Equal(t, tools.ConfirmationRule{}, rule)
 }
 
 func TestRegistry_NewRegistry_InvalidPatternReturnsError(t *testing.T) {

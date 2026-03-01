@@ -32,7 +32,6 @@ type executor struct {
 	registry       Registry
 	db             *sql.DB
 	defaultTimeout time.Duration
-	grantedCaps    []pkg.Capability
 }
 
 // NewExecutor creates an Executor backed by the given registry and database.
@@ -45,17 +44,7 @@ func NewExecutor(registry Registry, db *sql.DB, defaultTimeout time.Duration) *e
 		registry:       registry,
 		db:             db,
 		defaultTimeout: defaultTimeout,
-		grantedCaps:    nil,
 	}
-}
-
-// WithGrantedCapabilities sets the capabilities that have been externally
-// granted for this executor and returns the receiver for chaining.
-// When grantedCaps is nil or empty, capability enforcement is skipped
-// (all capabilities are considered granted by default).
-func (e *executor) WithGrantedCapabilities(caps []pkg.Capability) *executor {
-	e.grantedCaps = caps
-	return e
 }
 
 // Execute dispatches all calls concurrently, returning results in the same
@@ -94,20 +83,16 @@ func (e *executor) dispatchOne(ctx context.Context, call pkg.ToolCall) pkg.ToolR
 	}
 
 	// Enforce capabilities before any execution attempt.
-	// When grantedCaps is nil/empty, enforcement is skipped (all capabilities
-	// are granted by default; session-level enforcement happens in Phase 14).
-	if len(e.grantedCaps) > 0 {
-		if err := e.registry.EnforceCapabilities(call, e.grantedCaps); err != nil {
-			result := pkg.ToolResult{
-				ID: call.ID,
-				Error: &pkg.ToolError{
-					Kind:    pkg.ErrBadInput,
-					Message: err.Error(),
-				},
-			}
-			e.recordTelemetry(call.Name, false, 0, result.Error.Message, 0)
-			return result
+	if err := e.registry.EnforceCapabilities(call); err != nil {
+		result := pkg.ToolResult{
+			ID: call.ID,
+			Error: &pkg.ToolError{
+				Kind:    pkg.ErrBadInput,
+				Message: err.Error(),
+			},
 		}
+		e.recordTelemetry(call.Name, false, 0, result.Error.Message, 0)
+		return result
 	}
 
 	const maxAttempts = 3

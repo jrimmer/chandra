@@ -73,11 +73,18 @@ type ChannelsConfig struct {
 	Discord *DiscordConfig `toml:"discord"`
 }
 
+// ConfirmationRuleConfig holds a single confirmation rule from TOML config.
+type ConfirmationRuleConfig struct {
+	Pattern     string   `toml:"pattern"`
+	Categories  []string `toml:"categories"`
+	Description string   `toml:"description"`
+}
+
 // ToolsConfig holds tool execution settings.
 type ToolsConfig struct {
-	ConfirmationTimeout  string   `toml:"confirmation_timeout"`
-	DefaultToolTimeout   string   `toml:"default_tool_timeout"`
-	ConfirmationPatterns []string `toml:"confirmation_patterns"`
+	ConfirmationTimeout string                   `toml:"confirmation_timeout"`
+	DefaultToolTimeout  string                   `toml:"default_tool_timeout"`
+	ConfirmationRules   []ConfirmationRuleConfig `toml:"confirmation_rules"`
 }
 
 // ActionLogConfig holds action log settings.
