@@ -3,6 +3,7 @@ module github.com/jrimmer/chandra
 go 1.25.0
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/asg017/sqlite-vec-go-bindings v0.1.6
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/mattn/go-sqlite3 v1.14.34
