@@ -184,22 +184,21 @@ func TestSemanticStore_DimensionValidation(t *testing.T) {
 }
 
 func TestSemanticStore_ImportanceHeuristic(t *testing.T) {
-	cases := []struct {
-		name    string
-		content string
-		want    float32
+	tests := []struct {
+		name        string
+		content     string
+		hasToolCall bool
+		want        float32
 	}{
-		{"explicit reinforcement", "remember: always use UTC", 0.8},
-		{"no keyword", "some regular content", 0.5},
-		{"substantive long content", strings.Repeat("word ", 201), 0.6},
-		{"default", "sounds good, thanks", 0.5},
+		{"explicit reinforcement", "remember: always use UTC", false, 0.8},
+		{"tool call turn", "Called homeassistant.get_state", true, 0.6},
+		{"substantive exchange >200 tokens", strings.Repeat("word ", 201), false, 0.6},
+		{"default conversation", "sounds good, thanks", false, 0.5},
 	}
-
-	for _, tc := range cases {
+	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := semantic.ComputeImportance(tc.content)
-			assert.InDelta(t, tc.want, got, 0.001,
-				"content %q: expected importance %.1f, got %.1f", tc.content, tc.want, got)
+			got := semantic.ComputeImportance(tc.content, tc.hasToolCall)
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }

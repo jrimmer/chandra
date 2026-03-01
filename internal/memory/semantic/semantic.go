@@ -44,14 +44,18 @@ func NewStore(db *sql.DB, embedder provider.EmbeddingProvider) (*Store, error) {
 	return &Store{db: db, embedder: embedder}, nil
 }
 
-// ComputeImportance derives an importance score from the content text. It is
-// exported so tests can exercise the heuristic directly. Callers that have
-// already set entry.Importance should not call this — Store() respects the
-// caller-provided value when it is non-zero.
-func ComputeImportance(content string) float32 {
+// ComputeImportance derives an importance score from the content text and
+// whether the turn contained a tool call. It is exported so tests can exercise
+// the heuristic directly. Callers that have already set entry.Importance should
+// not call this — Store() respects the caller-provided value when it is
+// non-zero.
+func ComputeImportance(content string, hasToolCall bool) float32 {
 	lower := strings.ToLower(content)
 	if strings.Contains(lower, "remember") || strings.Contains(lower, "important") {
 		return 0.8
+	}
+	if hasToolCall {
+		return 0.6
 	}
 	if len(strings.Fields(content)) > 200 {
 		return 0.6
@@ -192,7 +196,8 @@ func insertOneInTx(ctx context.Context, tx *sql.Tx, entry pkg.MemoryEntry, embed
 		entry.ID = store.NewID()
 	}
 	if entry.Importance == 0 {
-		entry.Importance = ComputeImportance(entry.Content)
+		hasToolCall := strings.Contains(strings.ToLower(entry.Content), "called ")
+		entry.Importance = ComputeImportance(entry.Content, hasToolCall)
 	}
 
 	ts := entry.Timestamp
