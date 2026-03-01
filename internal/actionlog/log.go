@@ -88,12 +88,12 @@ func (l *ActionLog) Record(ctx context.Context, sessionID string, actionType Act
 	return nil
 }
 
-// Query returns actions whose timestamp falls within [since, until].
+// Query returns actions whose timestamp falls within [since, until).
 // If actionType is non-empty the results are filtered to that type.
 func (l *ActionLog) Query(ctx context.Context, since, until time.Time, actionType ActionType) ([]*Action, error) {
 	query := `SELECT id, type, session_id, details, timestamp
 	           FROM action_log
-	           WHERE timestamp BETWEEN ? AND ?`
+	           WHERE timestamp >= ? AND timestamp < ?`
 	args := []interface{}{since.Unix(), until.Unix()}
 
 	if actionType != "" {
@@ -116,7 +116,7 @@ func (l *ActionLog) Recent(ctx context.Context, limit int) ([]*Action, error) {
 	rows, err := l.db.QueryContext(ctx,
 		`SELECT id, type, session_id, details, timestamp
 		 FROM action_log
-		 ORDER BY timestamp DESC
+		 ORDER BY timestamp DESC, rowid DESC
 		 LIMIT ?`,
 		limit,
 	)
@@ -163,10 +163,16 @@ func (l *ActionLog) GenerateHourlyRollup(ctx context.Context, hour time.Time) (*
 
 	id := store.NewID()
 
-	// INSERT OR REPLACE upserts by the period+start_time uniqueness.
 	// The schema has no UNIQUE constraint on (period, start_time), so we use
-	// a DELETE + INSERT pattern to guarantee idempotency.
-	_, err = l.db.ExecContext(ctx,
+	// a DELETE + INSERT pattern to guarantee idempotency. Wrap in a transaction
+	// so the two operations are atomic.
+	tx, err := l.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("actionlog: rollup begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	_, err = tx.ExecContext(ctx,
 		`DELETE FROM action_rollups WHERE period = ? AND start_time = ?`,
 		"hourly", hour.Unix(),
 	)
@@ -174,13 +180,17 @@ func (l *ActionLog) GenerateHourlyRollup(ctx context.Context, hour time.Time) (*
 		return nil, fmt.Errorf("actionlog: rollup delete existing: %w", err)
 	}
 
-	_, err = l.db.ExecContext(ctx,
+	_, err = tx.ExecContext(ctx,
 		`INSERT INTO action_rollups (id, period, start_time, end_time, summary, action_count, error_count, top_tools)
 		 VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
 		id, "hourly", hour.Unix(), hourEnd.Unix(), summary, count, string(topToolsJSON),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("actionlog: rollup insert: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("actionlog: rollup commit: %w", err)
 	}
 
 	return &Rollup{
