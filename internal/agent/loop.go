@@ -66,14 +66,14 @@ type agentLoop struct {
 }
 
 // NewLoop constructs an AgentLoop with the provided configuration. Defaults are
-// applied for MaxRounds (5) and MaxQueueDepth (20) when zero.
+// applied for MaxRounds (5) and MaxQueueDepth (20) when zero or negative.
 func NewLoop(cfg LoopConfig) AgentLoop {
 	if cfg.MaxRounds <= 0 {
 		cfg.MaxRounds = 5
 	}
 	queueDepth := cfg.MaxQueueDepth
-	if queueDepth < 0 {
-		queueDepth = 0
+	if queueDepth <= 0 {
+		queueDepth = 20
 	}
 	return &agentLoop{
 		cfg:   cfg,
@@ -117,6 +117,9 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 	messages = append(messages, provider.Message{Role: "user", Content: msg.Content})
 
 	// Step 5 & 6: Call provider, enter tool-call loop.
+	// llmResponse holds the actual LLM-generated text (empty if only tool calls occurred).
+	// finalResponse is llmResponse or the graceful fallback — always non-empty after this block.
+	var llmResponse string
 	var finalResponse string
 	chainTrace := []string{}
 
@@ -132,7 +135,8 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 
 		// No tool calls — we have the final answer.
 		if len(resp.ToolCalls) == 0 {
-			finalResponse = resp.Message.Content
+			llmResponse = resp.Message.Content
+			finalResponse = llmResponse
 			break
 		}
 
@@ -169,6 +173,7 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 	}
 
 	// If we exhausted MaxRounds without a final text response, return graceful message.
+	// llmResponse remains empty to signal a tool-call-only turn for semantic storage.
 	if finalResponse == "" {
 		slog.Warn("agent/loop: max tool rounds exceeded",
 			"session_id", session.ID,
@@ -201,7 +206,8 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 	}
 
 	// Step 8: Conditional semantic storage.
-	l.maybeSemanticallyStore(ctx, msg.Content, finalResponse, session.ID)
+	// Pass llmResponse (the actual LLM text) so tool-call-only turns (empty llmResponse) are skipped.
+	l.maybeSemanticallyStore(ctx, msg.Content, llmResponse, session.ID)
 
 	// Step 9: Record outbound message to ActionLog.
 	outboundDetails, _ := json.Marshal(map[string]string{
@@ -275,6 +281,8 @@ func (l *agentLoop) filterSafeToolCalls(calls []pkg.ToolCall, userContent, chann
 }
 
 // maybeSemanticallyStore conditionally stores the turn in semantic memory.
+// assistantContent must be the actual LLM-generated text (not the graceful fallback) — an
+// empty string indicates a pure tool-call-only turn that produced no concluding text.
 // The reinforcement check happens BEFORE the length filter.
 func (l *agentLoop) maybeSemanticallyStore(ctx context.Context, userContent, assistantContent, sessionID string) {
 	combined := userContent + " " + assistantContent
@@ -298,8 +306,8 @@ func (l *agentLoop) maybeSemanticallyStore(ctx context.Context, userContent, ass
 		return
 	}
 
-	// Skip pure tool-call-only turns (no user or assistant text content).
-	if strings.TrimSpace(userContent) == "" && strings.TrimSpace(assistantContent) == "" {
+	// Skip pure tool-call-only turns: no concluding LLM text response was produced.
+	if strings.TrimSpace(assistantContent) == "" {
 		return
 	}
 

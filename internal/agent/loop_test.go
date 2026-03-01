@@ -257,9 +257,8 @@ func newTestConfig(
 	if maxRounds == 0 {
 		maxRounds = 5
 	}
-	if maxQueue == 0 {
-		maxQueue = 20
-	}
+	// Note: maxQueue == 0 is intentionally forwarded to NewLoop, which applies the
+	// spec-mandated default of 20. Pass a non-zero value to override that default.
 
 	return agent.LoopConfig{
 		Provider:      p,
@@ -465,8 +464,8 @@ func TestAgentLoop_Backpressure(t *testing.T) {
 	bgt := &mockBudget{}
 	p := &mockProvider{responses: []provider.CompletionResponse{textResponse("ok")}}
 
-	// MaxQueueDepth = 0: any RunScheduled call should be dropped.
-	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5, 0)
+	// MaxQueueDepth = 1: fill the queue with one turn, then the next must be dropped.
+	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5, 1)
 	loop := agent.NewLoop(cfg)
 
 	turn := scheduler.ScheduledTurn{
@@ -475,7 +474,14 @@ func TestAgentLoop_Backpressure(t *testing.T) {
 		SessionID: "sess-001",
 	}
 
+	// First call fills the queue.
 	err := loop.RunScheduled(context.Background(), turn)
+	if err != nil {
+		t.Errorf("expected nil error on first RunScheduled, got: %v", err)
+	}
+
+	// Second call must be dropped (queue is full) — still returns nil, not an error.
+	err = loop.RunScheduled(context.Background(), turn)
 	if err != nil {
 		t.Errorf("expected nil error on backpressure drop, got: %v", err)
 	}
