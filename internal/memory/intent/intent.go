@@ -88,7 +88,7 @@ func (s *Store) Create(ctx context.Context, description, condition, action strin
 
 // Update modifies all mutable fields of an existing intent.
 func (s *Store) Update(ctx context.Context, intent *Intent) error {
-	_, err := s.db.ExecContext(ctx,
+	res, err := s.db.ExecContext(ctx,
 		`UPDATE intents
 		 SET description = ?, condition = ?, action = ?, status = ?,
 		     last_checked = ?, next_check = ?
@@ -103,6 +103,13 @@ func (s *Store) Update(ctx context.Context, intent *Intent) error {
 	)
 	if err != nil {
 		return fmt.Errorf("intent: update: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("intent: update rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("intent: update: no intent with id %q", intent.ID)
 	}
 	return nil
 }
@@ -142,13 +149,20 @@ func (s *Store) Due(ctx context.Context) ([]*Intent, error) {
 
 // Complete sets the status of the identified intent to StatusCompleted.
 func (s *Store) Complete(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx,
+	res, err := s.db.ExecContext(ctx,
 		`UPDATE intents SET status = ? WHERE id = ?`,
 		string(StatusCompleted),
 		id,
 	)
 	if err != nil {
 		return fmt.Errorf("intent: complete: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("intent: complete rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("intent: complete: no intent with id %q", id)
 	}
 	return nil
 }

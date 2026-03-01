@@ -4,6 +4,7 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -34,6 +35,7 @@ type scheduler struct {
 	tickInterval time.Duration
 	turns        chan ScheduledTurn
 
+	mu     sync.Mutex
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
@@ -53,22 +55,30 @@ func NewScheduler(intentStore intent.IntentStore, tickInterval time.Duration, tu
 
 // Start launches the background tick goroutine. The provided context controls
 // external cancellation; Stop() provides cooperative shutdown.
+// Returns an error if the scheduler is already running.
 func (s *scheduler) Start(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cancel != nil {
+		return fmt.Errorf("scheduler: already started")
+	}
 	ctx, s.cancel = context.WithCancel(ctx)
-
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
 		s.run(ctx)
 	}()
-
 	return nil
 }
 
 // Stop cancels the internal context and waits for the goroutine to exit.
 func (s *scheduler) Stop() error {
-	if s.cancel != nil {
-		s.cancel()
+	s.mu.Lock()
+	cancel := s.cancel
+	s.cancel = nil
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 	s.wg.Wait()
 	return nil
