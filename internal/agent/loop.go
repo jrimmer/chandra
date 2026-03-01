@@ -3,7 +3,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -39,7 +38,7 @@ type LoopConfig struct {
 	Budget        ContextBudget
 	Registry      tools.Registry
 	Executor      tools.Executor
-	ActionLog     actionlog.Log
+	ActionLog     actionlog.ActionLog
 	Channel       channels.Channel
 	MaxRounds     int               // max tool call rounds per turn (default: 5)
 	MaxQueueDepth int               // max pending scheduled turns before shedding (default: 20)
@@ -88,26 +87,24 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 	if err != nil {
 		slog.Warn("agent/loop: failed to load recent episodes", "session_id", session.ID, "error", err)
 	}
-	// Step 2: Retrieve semantic memories relevant to the incoming message.
-	semanticMems, err := l.cfg.Memory.Semantic().QueryText(ctx, msg.Content, 5)
-	if err != nil {
-		slog.Warn("agent/loop: failed to query semantic memory", "error", err)
-	}
-
-	// Step 3: Assemble context window via ContextBudget.
+	// Steps 2-3: Retrieve semantic memories and assemble context window.
 	fixed := episodesToCandidates(recentEps)
-	ranked := memoriesToCandidates(semanticMems)
 
-	// Step 4: Apply tool allowlist.
+	// Step 4: Apply tool allowlist (before assembly so window carries the right tools).
 	availableTools := l.cfg.Registry.All()
 	if allowed, ok := l.cfg.ToolAllowlist[session.ChannelID]; ok {
 		availableTools = filterTools(availableTools, allowed)
 	}
 
-	window, err := l.cfg.Budget.Assemble(ctx, 8000, fixed, ranked, availableTools, 0)
+	window, err := assembleContext(ctx, msg, l.cfg.Memory, l.cfg.Budget, 8000, fixed, l.cfg.Provider)
 	if err != nil {
 		slog.Warn("agent/loop: budget assembly failed", "error", err)
 		window = budget.ContextWindow{Tools: availableTools}
+	}
+	// Merge available tools into the window; assembleContext passes nil tools
+	// so the caller owns the tool list (post allowlist filtering).
+	if window.Tools == nil {
+		window.Tools = availableTools
 	}
 
 	// Build initial messages: assembled context + current user message.
@@ -128,7 +125,11 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 			Tools:    window.Tools,
 		})
 		if err != nil {
-			_ = l.cfg.ActionLog.Record(ctx, session.ID, actionlog.ActionError, err.Error())
+			_ = l.cfg.ActionLog.Record(ctx, actionlog.ActionEntry{
+				Type:      actionlog.ActionError,
+				SessionID: session.ID,
+				Summary:   err.Error(),
+			})
 			return "", fmt.Errorf("agent/loop: provider.Complete: %w", err)
 		}
 
@@ -156,11 +157,16 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 				chainTrace = append(chainTrace, toolName)
 
 				// Record tool call to ActionLog.
-				detailJSON, _ := json.Marshal(map[string]any{
-					"tool": toolName,
-					"id":   safeToolCalls[i].ID,
+				_ = l.cfg.ActionLog.Record(ctx, actionlog.ActionEntry{
+					Type:      actionlog.ActionToolCall,
+					SessionID: session.ID,
+					ToolName:  toolName,
+					Summary:   "tool call: " + toolName,
+					Details: map[string]any{
+						"tool": toolName,
+						"id":   safeToolCalls[i].ID,
+					},
 				})
-				_ = l.cfg.ActionLog.Record(ctx, session.ID, actionlog.ActionToolCall, string(detailJSON))
 
 				// Append tool result to message history.
 				messages = append(messages, provider.Message{
@@ -210,11 +216,15 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 	l.maybeSemanticallyStore(ctx, msg.Content, llmResponse, session.ID)
 
 	// Step 9: Record outbound message to ActionLog.
-	outboundDetails, _ := json.Marshal(map[string]string{
-		"channel_id": session.ChannelID,
-		"session_id": session.ID,
+	_ = l.cfg.ActionLog.Record(ctx, actionlog.ActionEntry{
+		Type:      actionlog.ActionMessageSent,
+		SessionID: session.ID,
+		Summary:   "message sent in session " + session.ID,
+		Details: map[string]any{
+			"channel_id": session.ChannelID,
+			"session_id": session.ID,
+		},
 	})
-	_ = l.cfg.ActionLog.Record(ctx, session.ID, actionlog.ActionMessageSent, string(outboundDetails))
 
 	return finalResponse, nil
 }

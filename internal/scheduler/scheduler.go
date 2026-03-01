@@ -113,6 +113,12 @@ func (s *scheduler) tick(ctx context.Context) {
 	}
 
 	for _, in := range due {
+		// Evaluate structural condition before emitting a turn.
+		if !evaluateCondition(in) {
+			slog.Debug("scheduler: condition not satisfied, skipping intent", "id", in.ID, "condition", in.Condition)
+			continue
+		}
+
 		turn := ScheduledTurn{
 			IntentID:  in.ID,
 			Prompt:    in.Action,
