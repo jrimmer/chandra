@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/jrimmer/chandra/internal/channels"
@@ -89,12 +90,14 @@ func NewDiscord(token string, channelIDs []string) (*Discord, error) {
 	}, nil
 }
 
-// Listen registers a MessageCreate handler, opens the Discord WebSocket
-// connection, sets the bot status to Online, and returns a channel of
-// InboundMessages. The returned channel is closed when ctx is cancelled.
-func (d *Discord) Listen(ctx context.Context) (<-chan channels.InboundMessage, error) {
-	out := make(chan channels.InboundMessage, 64)
+// ID returns the adapter identifier for this Discord channel.
+func (d *Discord) ID() string { return "discord" }
 
+// Listen registers a MessageCreate handler, opens the Discord WebSocket
+// connection, sets the bot status to Online, and writes InboundMessages to
+// msgs. Listen blocks until ctx is cancelled, then closes the Discord session.
+// The caller owns the msgs channel and is responsible for draining it.
+func (d *Discord) Listen(ctx context.Context, msgs chan<- channels.InboundMessage) error {
 	d.session.AddHandler(func(s *discordgo.Session, m *discordgo.MessageCreate) {
 		// Ignore messages sent by the bot itself.
 		if m.Author == nil || m.Author.ID == s.State.User.ID {
@@ -120,7 +123,7 @@ func (d *Discord) Listen(ctx context.Context) (<-chan channels.InboundMessage, e
 		}
 		d.mu.Unlock()
 
-		meta := make(map[string]string)
+		var meta map[string]any
 
 		// Prompt injection detection.
 		if checkSuspicious(m.Content) {
@@ -129,7 +132,7 @@ func (d *Discord) Listen(ctx context.Context) (<-chan channels.InboundMessage, e
 				"channel_id", m.ChannelID,
 				"user_id", m.Author.ID,
 			)
-			meta["suspicious"] = "true"
+			meta = map[string]any{"suspicious": "true"}
 		}
 
 		msg := channels.InboundMessage{
@@ -138,7 +141,8 @@ func (d *Discord) Listen(ctx context.Context) (<-chan channels.InboundMessage, e
 			ChannelID:      m.ChannelID,
 			UserID:         m.Author.ID,
 			Content:        m.Content,
-			Metadata:       meta,
+			Timestamp:      time.Now(),
+			Meta:           meta,
 		}
 
 		// Guard against sending on a closed channel after shutdown.
@@ -150,14 +154,14 @@ func (d *Discord) Listen(ctx context.Context) (<-chan channels.InboundMessage, e
 		}
 
 		select {
-		case out <- msg:
+		case msgs <- msg:
 		case <-ctx.Done():
 			return
 		}
 	})
 
 	if err := d.session.Open(); err != nil {
-		return nil, fmt.Errorf("discord: open session: %w", err)
+		return fmt.Errorf("discord: open session: %w", err)
 	}
 
 	if err := d.session.UpdateGameStatus(0, "Ready"); err != nil {
@@ -165,19 +169,18 @@ func (d *Discord) Listen(ctx context.Context) (<-chan channels.InboundMessage, e
 		slog.Warn("discord: failed to set game status", "error", err)
 	}
 
-	// Close the output channel when the context is done, and close the
-	// Discord WebSocket connection. Setting done=true under the write lock
-	// before closing prevents handler goroutines from sending on a closed channel.
+	// Block until the context is cancelled, then close the Discord WebSocket
+	// connection. Setting done=true under the write lock before closing prevents
+	// handler goroutines from sending on a closed channel.
 	go func() {
 		<-ctx.Done()
 		_ = d.session.Close()
 		d.mu.Lock()
 		d.done = true
 		d.mu.Unlock()
-		close(out)
 	}()
 
-	return out, nil
+	return nil
 }
 
 // Send transmits a message to the target channel specified in msg.ChannelID.

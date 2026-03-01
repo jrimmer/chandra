@@ -215,6 +215,14 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 	// Pass llmResponse (the actual LLM text) so tool-call-only turns (empty llmResponse) are skipped.
 	l.maybeSemanticallyStore(ctx, msg.Content, llmResponse, session.ID)
 
+	// G17: Update LastInteraction on the relationship state after each turn.
+	if rel, relErr := l.cfg.Memory.Identity().Relationship(); relErr == nil {
+		rel.LastInteraction = time.Now()
+		if updateErr := l.cfg.Memory.Identity().UpdateRelationship(ctx, rel); updateErr != nil {
+			slog.Warn("agent/loop: failed to update relationship last_interaction", "error", updateErr)
+		}
+	}
+
 	// Step 9: Record outbound message to ActionLog.
 	_ = l.cfg.ActionLog.Record(ctx, actionlog.ActionEntry{
 		Type:      actionlog.ActionMessageSent,

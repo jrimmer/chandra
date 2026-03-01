@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/lmittmann/tint"
+
 	"github.com/jrimmer/chandra/internal/actionlog"
 	"github.com/jrimmer/chandra/internal/agent"
 	"github.com/jrimmer/chandra/internal/api"
@@ -46,7 +48,13 @@ func main() {
 	safeMode := flag.Bool("safe", false, "start in safe mode (minimal config, no external connections)")
 	flag.Parse()
 
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	// G20: use tint for colorised output on TTY, JSON otherwise.
+	logLevel := slog.LevelInfo
+	if os.Getenv("TERM") != "" || os.Getenv("COLORTERM") != "" {
+		slog.SetDefault(slog.New(tint.NewHandler(os.Stderr, &tint.Options{Level: logLevel})))
+	} else {
+		slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})))
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
@@ -65,6 +73,9 @@ func run(ctx context.Context, safeMode bool) error {
 	// Step 1: Determine config path and load config.
 	// -------------------------------------------------------------------
 	cfgDir, cfgPath := resolveConfigPath()
+
+	// G19: SafeWriter for config rollback watchdog (used later after API start).
+	safeWriter := config.NewSafeWriter(cfgDir)
 
 	var cfg *config.Config
 	if safeMode {
@@ -169,6 +180,11 @@ func run(ctx context.Context, safeMode bool) error {
 		confirmGate = nil
 	}
 
+	// G5: wire confirm store into executor so RequiresConfirmation is enforced.
+	if confirmGate != nil {
+		executor.WithConfirmStore(confirmGate)
+	}
+
 	// Action log.
 	alog, err := actionlog.NewLog(db)
 	if err != nil {
@@ -198,12 +214,14 @@ func run(ctx context.Context, safeMode bool) error {
 	}
 
 	// Context Budget Manager.
+	// G10: wire the intent store via an adapter (budget.IntentStore uses budget.Intent,
+	// while intent.IntentStore uses intent.Intent — same shape, different types).
 	budgetMgr := budget.New(
 		float32(cfg.Budget.SemanticWeight),
 		float32(cfg.Budget.RecencyWeight),
 		float32(cfg.Budget.ImportanceWeight),
 		float32(cfg.Budget.RecencyDecayHours),
-		nil, // intent store adapter not wired in this phase
+		&intentStoreAdapter{inStore},
 	)
 
 	// -------------------------------------------------------------------
@@ -309,6 +327,7 @@ func run(ctx context.Context, safeMode bool) error {
 			Registry:  registry,
 			Executor:  executor,
 			ActionLog: alog,
+			Channel:   discordChannel, // G18: wire Discord channel for response sending
 			MaxRounds: cfg.Agent.MaxToolRounds,
 		}
 		agentLoop = agent.NewLoop(loopCfg)
@@ -369,6 +388,55 @@ func run(ctx context.Context, safeMode bool) error {
 		return fmt.Errorf("chandrad: API server start: %w", err)
 	}
 	slog.Info("chandrad: API server listening", "socket", socketPath)
+
+	// G6: Expire stale confirmations every minute.
+	if confirmGate != nil {
+		go func() {
+			ticker := time.NewTicker(time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					if _, err := confirmGate.ExpireStale(daemonCtx); err != nil {
+						slog.Warn("confirm: expire stale failed", "err", err)
+					}
+				case <-daemonCtx.Done():
+					return
+				}
+			}
+		}()
+	}
+
+	// G12: Generate action log rollups every hour.
+	go func() {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := alog.GenerateRollups(daemonCtx); err != nil {
+					slog.Warn("actionlog: generate rollups failed", "err", err)
+				}
+			case <-daemonCtx.Done():
+				return
+			}
+		}
+	}()
+
+	// G19: Startup health watchdog — roll back config if DB is unreachable after 10s.
+	go func() {
+		select {
+		case <-time.After(10 * time.Second):
+			if err := db.PingContext(context.Background()); err != nil {
+				slog.Error("startup health check failed; rolling back config", "err", err)
+				if rbErr := safeWriter.RollbackToLastGood(); rbErr != nil {
+					slog.Error("config rollback failed", "err", rbErr)
+				}
+			}
+		case <-daemonCtx.Done():
+			return
+		}
+	}()
 
 	// -------------------------------------------------------------------
 	// Step 14: Block until context is cancelled.
@@ -779,6 +847,29 @@ func registerHandlers(
 		}
 		return map[string]any{"ok": true}, nil
 	})
+}
+
+// intentStoreAdapter bridges intent.IntentStore to budget.IntentStore.
+// budget.IntentStore.Active returns []budget.Intent; intent.IntentStore.Active
+// returns []intent.Intent — same logical shape, different package types.
+type intentStoreAdapter struct {
+	s intent.IntentStore
+}
+
+func (a *intentStoreAdapter) Active(ctx context.Context) ([]budget.Intent, error) {
+	intents, err := a.s.Active(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]budget.Intent, len(intents))
+	for i, in := range intents {
+		out[i] = budget.Intent{
+			ID:          in.ID,
+			Description: in.Description,
+			Condition:   in.Condition,
+		}
+	}
+	return out, nil
 }
 
 // noopSemanticStore is a no-op implementation of semantic.SemanticStore used

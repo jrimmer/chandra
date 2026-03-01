@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jrimmer/chandra/internal/tools/confirm"
 	"github.com/jrimmer/chandra/pkg"
 	"github.com/jrimmer/chandra/store"
 )
@@ -32,6 +33,7 @@ type executor struct {
 	registry       Registry
 	db             *sql.DB
 	defaultTimeout time.Duration
+	confirmStore   *confirm.Store
 }
 
 // NewExecutor creates an Executor backed by the given registry and database.
@@ -45,6 +47,13 @@ func NewExecutor(registry Registry, db *sql.DB, defaultTimeout time.Duration) *e
 		db:             db,
 		defaultTimeout: defaultTimeout,
 	}
+}
+
+// WithConfirmStore sets the confirmation store on the executor, enabling the
+// confirmation gate for tools that require human approval.
+func (e *executor) WithConfirmStore(cs *confirm.Store) *executor {
+	e.confirmStore = cs
+	return e
 }
 
 // Execute dispatches all calls concurrently, returning results in the same
@@ -80,6 +89,23 @@ func (e *executor) dispatchOne(ctx context.Context, call pkg.ToolCall) pkg.ToolR
 		}
 		e.recordTelemetry(call.Name, false, 0, result.Error.Message, 0)
 		return result
+	}
+
+	// Check confirmation gate before execution.
+	if required, rule := e.registry.RequiresConfirmation(call); required {
+		if e.confirmStore != nil {
+			// Default expiry: 24h. The tool call payload is the name for traceability.
+			pending, err := e.confirmStore.Create(ctx, call.Name, 24*time.Hour)
+			if err == nil {
+				return pkg.ToolResult{
+					ID:      call.ID,
+					Content: fmt.Sprintf("Action requires confirmation. Run: chandra confirm %s", pending.ID),
+				}
+			}
+			slog.Warn("tools: confirm store create failed, proceeding without gate", "tool", call.Name, "err", err)
+		} else {
+			slog.Warn("tools: tool requires confirmation but no confirm store configured", "tool", call.Name, "rule", rule.Description)
+		}
 	}
 
 	// Enforce capabilities before any execution attempt.

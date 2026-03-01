@@ -2,28 +2,35 @@
 // bidirectional communication between the agent and external messaging platforms.
 package channels
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // InboundMessage represents a message received from an external channel.
 type InboundMessage struct {
-	ID             string            // message ID from channel
-	ConversationID string            // stable session ID
-	ChannelID      string            // source channel
+	ID             string         // message ID from channel
+	ConversationID string         // stable session ID: hash(channel_id + user_id), set by channel
+	ChannelID      string         // source channel (kept for routing; not in design spec)
 	UserID         string
 	Content        string
-	Metadata       map[string]string // e.g., "suspicious": "true"
+	Timestamp      time.Time      // time the message was received
+	Meta           map[string]any // e.g., map[string]any{"suspicious": "true"}
 }
 
 // OutboundMessage represents a message the agent wants to send to a channel.
 type OutboundMessage struct {
-	ChannelID string // target channel for routing
+	ChannelID string         // target channel for routing
+	UserID    string
 	Content   string
-	ReplyToID string // optional, for threading
+	ReplyToID string         // optional, for threading
+	Meta      map[string]any
 }
 
 // Channel is the interface that all messaging platform adapters must implement.
 type Channel interface {
-	Listen(ctx context.Context) (<-chan InboundMessage, error)
+	ID() string
+	Listen(ctx context.Context, msgs chan<- InboundMessage) error
 	Send(ctx context.Context, msg OutboundMessage) error
 	React(ctx context.Context, messageID, emoji string) error
 }
