@@ -9,6 +9,19 @@ import (
 	"time"
 )
 
+// IdentityStore defines the identity and relationship storage contract.
+type IdentityStore interface {
+	Agent() (AgentProfile, error)
+	SetAgent(ctx context.Context, profile AgentProfile) error
+	User() (UserProfile, error)
+	SetUser(ctx context.Context, profile UserProfile) error
+	Relationship() (RelationshipState, error)
+	UpdateRelationship(ctx context.Context, state RelationshipState) error
+}
+
+// Compile-time assertion that *Store satisfies IdentityStore.
+var _ IdentityStore = (*Store)(nil)
+
 // AgentProfile holds Chandra's identity configuration.
 type AgentProfile struct {
 	Name         string
@@ -88,7 +101,7 @@ func (s *Store) Agent() (AgentProfile, error) {
 	var profile AgentProfile
 	var traitsRaw, capsRaw string
 
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(context.Background(),
 		`SELECT name, persona, traits, capabilities FROM agent_profile WHERE id = ?`,
 		agentID,
 	).Scan(&profile.Name, &profile.Persona, &traitsRaw, &capsRaw)
@@ -110,6 +123,10 @@ func (s *Store) Agent() (AgentProfile, error) {
 
 // SetUser upserts the user profile for the configured user ID.
 func (s *Store) SetUser(ctx context.Context, profile UserProfile) error {
+	// Use s.userID as the authoritative key so callers cannot write under a
+	// different ID. Also normalise the profile's ID field for consistency.
+	profile.ID = s.userID
+
 	var prefsJSON []byte
 	if profile.Preferences != nil {
 		var err error
@@ -127,7 +144,7 @@ func (s *Store) SetUser(ctx context.Context, profile UserProfile) error {
 		   timezone    = excluded.timezone,
 		   preferences = excluded.preferences,
 		   notes       = excluded.notes`,
-		profile.ID,
+		s.userID,
 		profile.Name,
 		profile.Timezone,
 		prefsJSON,
@@ -145,7 +162,7 @@ func (s *Store) User() (UserProfile, error) {
 	var prefsRaw []byte
 	var notes sql.NullString
 
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(context.Background(),
 		`SELECT id, name, timezone, preferences, notes FROM user_profile WHERE id = ?`,
 		s.userID,
 	).Scan(&profile.ID, &profile.Name, &profile.Timezone, &prefsRaw, &notes)
@@ -210,7 +227,7 @@ func (s *Store) Relationship() (RelationshipState, error) {
 	var lastInteraction int64
 	var style sql.NullString
 
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(context.Background(),
 		`SELECT trust_level, communication_style, ongoing_context, last_interaction
 		 FROM relationship_state
 		 WHERE agent_id = ? AND user_id = ?`,

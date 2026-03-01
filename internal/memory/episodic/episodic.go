@@ -11,6 +11,16 @@ import (
 	"github.com/jrimmer/chandra/store"
 )
 
+// EpisodicStore defines the append-only episode storage contract.
+type EpisodicStore interface {
+	Append(ctx context.Context, ep pkg.Episode) error
+	Recent(ctx context.Context, sessionID string, n int) ([]pkg.Episode, error)
+	Since(ctx context.Context, t time.Time) ([]pkg.Episode, error)
+}
+
+// Compile-time assertion that *Store satisfies EpisodicStore.
+var _ EpisodicStore = (*Store)(nil)
+
 // Store is an append-only episodic memory store backed by SQLite.
 type Store struct {
 	db *sql.DB
@@ -28,16 +38,16 @@ func (s *Store) Append(ctx context.Context, ep pkg.Episode) error {
 		ep.ID = store.NewID()
 	}
 
-	var tagsJSON []byte
-	if len(ep.Tags) > 0 {
-		var err error
-		tagsJSON, err = json.Marshal(ep.Tags)
-		if err != nil {
-			return fmt.Errorf("episodic: marshal tags: %w", err)
-		}
+	tags := ep.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+	tagsJSON, err := json.Marshal(tags)
+	if err != nil {
+		return fmt.Errorf("episodic: marshal tags: %w", err)
 	}
 
-	_, err := s.db.ExecContext(ctx,
+	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO episodes (id, session_id, role, content, timestamp, tags)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		ep.ID,
