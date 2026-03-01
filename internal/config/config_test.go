@@ -93,6 +93,21 @@ name = "Chandra"
 	assert.Error(t, err, "should fail with missing required fields")
 }
 
+func TestLoad_FileNotFound(t *testing.T) {
+	_, err := Load("/nonexistent/path/config.toml")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "read config")
+}
+
+func TestLoad_MalformedTOML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bad.toml")
+	err := os.WriteFile(path, []byte(`[broken`), 0600)
+	require.NoError(t, err)
+	_, err = Load(path)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "parse config")
+}
+
 func TestLoad_MissingChannel(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	err := os.WriteFile(path, []byte(`

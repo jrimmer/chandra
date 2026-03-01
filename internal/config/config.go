@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -108,9 +109,17 @@ func Load(path string) (*Config, error) {
 	}
 
 	// Env var interpolation: replace ${VAR} with environment values.
+	var unresolved []string
 	expanded := os.Expand(string(data), func(key string) string {
-		return os.Getenv(key)
+		val := os.Getenv(key)
+		if val == "" {
+			unresolved = append(unresolved, key)
+		}
+		return val
 	})
+	if len(unresolved) > 0 {
+		slog.Warn("config: unresolved environment variables", "vars", unresolved)
+	}
 
 	var cfg Config
 	if _, err := toml.Decode(expanded, &cfg); err != nil {
@@ -140,6 +149,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.MQTT.Bind == "" {
 		cfg.MQTT.Bind = "127.0.0.1:1883"
 	}
+	// Note: zero values here mean "not set in config" since TOML unmarshals
+	// missing fields and explicit zero fields the same way. A user cannot
+	// intentionally set these to 0.0; use a small positive value instead.
 	if cfg.Budget.SemanticWeight == 0 {
 		cfg.Budget.SemanticWeight = 0.4
 	}
@@ -179,8 +191,13 @@ func validate(cfg *Config) error {
 	if cfg.Provider.Model == "" {
 		errs = append(errs, "provider.model is required")
 	}
-	if cfg.Provider.Type == "" {
+	switch cfg.Provider.Type {
+	case "openai", "anthropic", "ollama":
+		// valid
+	case "":
 		errs = append(errs, "provider.type is required")
+	default:
+		errs = append(errs, fmt.Sprintf("provider.type %q is not valid (openai, anthropic, ollama)", cfg.Provider.Type))
 	}
 	if cfg.Embeddings.BaseURL == "" {
 		errs = append(errs, "embeddings.base_url is required")
@@ -195,6 +212,15 @@ func validate(cfg *Config) error {
 	// At least one channel must be configured.
 	if cfg.Channels.Discord == nil || cfg.Channels.Discord.Token == "" {
 		errs = append(errs, "at least one channel must be configured (channels.discord)")
+	}
+
+	switch cfg.MQTT.Mode {
+	case "embedded", "external", "disabled":
+		// valid
+	case "":
+		// mode was defaulted to "embedded", so this shouldn't happen, but handle it
+	default:
+		errs = append(errs, fmt.Sprintf("mqtt.mode %q is not valid (embedded, external, disabled)", cfg.MQTT.Mode))
 	}
 
 	if len(errs) > 0 {
