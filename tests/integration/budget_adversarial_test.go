@@ -97,6 +97,9 @@ func TestIntegration_CBM_Adversarial(t *testing.T) {
 	}
 
 	// 8. Assert: result is a valid ContextWindow (no nil panic, fields accessible).
+	if len(window.Messages) < 1 {
+		t.Errorf("CBM.Assemble returned 0 messages; expected at least 1 (system prompt or user message)")
+	}
 	t.Logf("CBM adversarial result: TotalTokens=%d, Messages=%d, Dropped=%d",
 		window.TotalTokens, len(window.Messages), window.Dropped)
 }

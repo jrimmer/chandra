@@ -46,7 +46,7 @@ CGO_ENABLED=1 go build ./...     — PASS (no errors)
 | HomeAssistant skill executes | Requires runtime config | `skills/homeassistant` implemented. Requires running HA instance + long-lived token. |
 | Web search skill executes | Requires runtime config | `skills/web` implemented. Executes via DuckDuckGo HTML scraping (no API key needed). |
 | MQTT publish skill executes | Requires runtime config | `skills/mqtt` implemented. Requires MQTT broker. |
-| Semantic search performance | Measured | Brute-force cosine scan: ~3.2s avg per query at 10k entries × 1536 dims on Apple M3. Sub-100ms target requires ANN indexing (future work). Benchmark: `3,451,370,375 ns/op`. |
+| Memory query < 100ms | NOT MET | sqlite-vec uses brute-force O(n) cosine scan; 10k × 1536-dim queries average ~3.2s. Requires ANN indexing (future work for v2). |
 | `go vet ./...` passes cleanly | Pass | No warnings or errors. |
 | `go build ./...` passes cleanly | Pass | Both `chandrad` and `chandra` binaries build successfully. |
 | All unit tests pass | Pass | `CGO_ENABLED=1 go test ./...` — all packages pass. |

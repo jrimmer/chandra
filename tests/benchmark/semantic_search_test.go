@@ -212,9 +212,9 @@ func TestSemanticSearch_10k_Under100ms(t *testing.T) {
 			t.Errorf("QueryText(%q): expected results, got none", q)
 		}
 		if elapsed > target {
-			// Log rather than fail: brute-force cosine scan at 10k x 1536 dims
-			// exceeds 100ms on most hardware. Tracked as a performance target.
-			t.Logf("PERF NOTE: QueryText(%q) took %v (target: %v, future ANN needed)", q, elapsed, target)
+			// Hard-fail: spec requires sub-100ms. sqlite-vec brute-force scan at
+			// 10k x 1536 dims exceeds this target (~3.2s). Fails to reveal the gap.
+			t.Errorf("PERF NOTE: QueryText(%q) took %v (target: %v, future ANN needed)", q, elapsed, target)
 		}
 		totalDuration += elapsed
 	}
