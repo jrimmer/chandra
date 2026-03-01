@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/jrimmer/chandra/pkg"
 )
@@ -29,7 +30,7 @@ var _ pkg.Tool = (*WebSearch)(nil)
 func NewWebSearch() *WebSearch {
 	return &WebSearch{
 		baseURL:    defaultBaseURL,
-		httpClient: http.DefaultClient,
+		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -126,7 +127,7 @@ func (ws *WebSearch) Execute(ctx context.Context, call pkg.ToolCall) (pkg.ToolRe
 		}, nil
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxContentLen+1))
 	if err != nil {
 		return pkg.ToolResult{
 			ID: call.ID,

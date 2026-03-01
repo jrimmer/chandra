@@ -7,9 +7,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
+	"time"
 
 	"github.com/jrimmer/chandra/pkg"
 )
+
+const maxResponseLen = 1 << 20 // 1 MiB
 
 // Compile-time assertions.
 var _ pkg.Tool = (*HAGetState)(nil)
@@ -22,12 +27,12 @@ type HAGetState struct {
 	httpClient *http.Client
 }
 
-// NewHAGetState returns a new HAGetState using http.DefaultClient.
+// NewHAGetState returns a new HAGetState using a client with a 30s timeout.
 func NewHAGetState(baseURL, token string) *HAGetState {
 	return &HAGetState{
 		baseURL:    baseURL,
 		token:      token,
-		httpClient: http.DefaultClient,
+		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -60,8 +65,8 @@ func (h *HAGetState) Execute(ctx context.Context, call pkg.ToolCall) (pkg.ToolRe
 		return errorResult(call.ID, pkg.ErrBadInput, "entity_id parameter is required and must not be empty", nil), nil
 	}
 
-	url := fmt.Sprintf("%s/api/states/%s", h.baseURL, p.EntityID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	reqURL := fmt.Sprintf("%s/api/states/%s", h.baseURL, url.PathEscape(p.EntityID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return errorResult(call.ID, pkg.ErrInternal, fmt.Sprintf("failed to build request: %v", err), err), nil
 	}
@@ -75,10 +80,14 @@ func (h *HAGetState) Execute(ctx context.Context, call pkg.ToolCall) (pkg.ToolRe
 	defer resp.Body.Close()
 
 	if toolErr := httpStatusToError(call.ID, resp.StatusCode); toolErr != nil {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		if len(errBody) > 0 {
+			toolErr.Error.Message += ": " + strings.TrimSpace(string(errBody))
+		}
 		return *toolErr, nil
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseLen))
 	if err != nil {
 		return errorResult(call.ID, pkg.ErrTransient, fmt.Sprintf("failed to read response: %v", err), err), nil
 	}
@@ -93,12 +102,12 @@ type HASetState struct {
 	httpClient *http.Client
 }
 
-// NewHASetState returns a new HASetState using http.DefaultClient.
+// NewHASetState returns a new HASetState using a client with a 30s timeout.
 func NewHASetState(baseURL, token string) *HASetState {
 	return &HASetState{
 		baseURL:    baseURL,
 		token:      token,
-		httpClient: http.DefaultClient,
+		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -145,7 +154,7 @@ func (h *HASetState) Execute(ctx context.Context, call pkg.ToolCall) (pkg.ToolRe
 		return errorResult(call.ID, pkg.ErrInternal, fmt.Sprintf("failed to marshal request body: %v", err), err), nil
 	}
 
-	reqURL := fmt.Sprintf("%s/api/services/%s/%s", h.baseURL, p.Domain, p.Service)
+	reqURL := fmt.Sprintf("%s/api/services/%s/%s", h.baseURL, url.PathEscape(p.Domain), url.PathEscape(p.Service))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(bodyJSON))
 	if err != nil {
 		return errorResult(call.ID, pkg.ErrInternal, fmt.Sprintf("failed to build request: %v", err), err), nil
@@ -160,10 +169,14 @@ func (h *HASetState) Execute(ctx context.Context, call pkg.ToolCall) (pkg.ToolRe
 	defer resp.Body.Close()
 
 	if toolErr := httpStatusToError(call.ID, resp.StatusCode); toolErr != nil {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		if len(errBody) > 0 {
+			toolErr.Error.Message += ": " + strings.TrimSpace(string(errBody))
+		}
 		return *toolErr, nil
 	}
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseLen))
 	if err != nil {
 		return errorResult(call.ID, pkg.ErrTransient, fmt.Sprintf("failed to read response: %v", err), err), nil
 	}

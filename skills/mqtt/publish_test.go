@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jrimmer/chandra/pkg"
@@ -110,7 +111,7 @@ func TestMQTTPublish_Execute_NilBus(t *testing.T) {
 	if result.Error == nil {
 		t.Fatal("expected ToolResult.Error when bus is nil")
 	}
-	if !contains(result.Error.Message, "event bus") {
+	if !strings.Contains(result.Error.Message, "event bus") {
 		t.Errorf("expected 'event bus' in error message, got: %q", result.Error.Message)
 	}
 }
@@ -175,14 +176,3 @@ func TestMQTTPublish_Execute_MissingPayload(t *testing.T) {
 	}
 }
 
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
-		func() bool {
-			for i := 0; i <= len(s)-len(sub); i++ {
-				if s[i:i+len(sub)] == sub {
-					return true
-				}
-			}
-			return false
-		}())
-}
