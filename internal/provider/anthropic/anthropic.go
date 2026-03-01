@@ -43,16 +43,9 @@ func (p *Provider) Complete(ctx context.Context, req provider.CompletionRequest)
 			systemBlocks = append(systemBlocks, anthsdk.TextBlockParam{Text: m.Content})
 
 		case "user":
-			if m.ToolCallID != "" {
-				// This is a tool result message
-				apiMessages = append(apiMessages, anthsdk.NewUserMessage(
-					anthsdk.NewToolResultBlock(m.ToolCallID, m.Content, false),
-				))
-			} else {
-				apiMessages = append(apiMessages, anthsdk.NewUserMessage(
-					anthsdk.NewTextBlock(m.Content),
-				))
-			}
+			apiMessages = append(apiMessages, anthsdk.NewUserMessage(
+				anthsdk.NewTextBlock(m.Content),
+			))
 
 		case "assistant":
 			if len(m.ToolCalls) > 0 {
@@ -113,9 +106,7 @@ func (p *Provider) Complete(ctx context.Context, req provider.CompletionRequest)
 	if len(apiTools) > 0 {
 		apiReq.Tools = apiTools
 	}
-	if req.Temperature != 0 {
-		apiReq.Temperature = param.NewOpt(float64(req.Temperature))
-	}
+	apiReq.Temperature = param.NewOpt(float64(req.Temperature))
 
 	resp, err := p.client.Messages.New(ctx, apiReq)
 	if err != nil {

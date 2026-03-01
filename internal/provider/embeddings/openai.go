@@ -33,6 +33,10 @@ func (p *Provider) Embed(ctx context.Context, req provider.EmbeddingRequest) (pr
 		model = req.Model
 	}
 
+	if len(req.Texts) == 0 {
+		return provider.EmbeddingResponse{Model: model, Dimensions: p.dimensions}, nil
+	}
+
 	resp, err := p.client.CreateEmbeddings(ctx, goopenai.EmbeddingRequestStrings{
 		Input: req.Texts,
 		Model: goopenai.EmbeddingModel(model),

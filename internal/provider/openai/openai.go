@@ -37,6 +37,18 @@ func (p *Provider) Complete(ctx context.Context, req provider.CompletionRequest)
 		if m.ToolCallID != "" {
 			oaiMsg.ToolCallID = m.ToolCallID
 		}
+		if len(m.ToolCalls) > 0 {
+			for _, tc := range m.ToolCalls {
+				oaiMsg.ToolCalls = append(oaiMsg.ToolCalls, goopenai.ToolCall{
+					ID:   tc.ID,
+					Type: goopenai.ToolTypeFunction,
+					Function: goopenai.FunctionCall{
+						Name:      tc.Name,
+						Arguments: string(tc.Parameters),
+					},
+				})
+			}
+		}
 		oaiMessages = append(oaiMessages, oaiMsg)
 	}
 
