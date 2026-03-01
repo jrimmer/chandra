@@ -20,7 +20,7 @@ const (
 	ActionToolCall    ActionType = "tool_call"
 	ActionMessageSent ActionType = "message_sent"
 	ActionError       ActionType = "error"
-	ActionScheduled   ActionType = "scheduled_turn"
+	ActionScheduled   ActionType = "scheduled"
 	ActionConfirm     ActionType = "confirmation"
 )
 
