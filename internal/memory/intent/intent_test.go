@@ -31,30 +31,44 @@ func newTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
+// createIntent is a test helper that creates an intent with a generated ID and
+// returns the ID so callers can reference it in subsequent operations.
+func createIntent(t *testing.T, st intent.IntentStore, ctx context.Context, description, condition, action string) string {
+	t.Helper()
+	id := store.NewID()
+	require.NoError(t, st.Create(ctx, intent.Intent{
+		ID:          id,
+		Description: description,
+		Condition:   condition,
+		Action:      action,
+	}))
+	return id
+}
+
 func TestIntentStore_CreateAndActive(t *testing.T) {
 	cases := []struct {
-		name        string
-		statuses    []intent.IntentStatus
-		wantActive  int
+		name       string
+		statuses   []intent.IntentStatus
+		wantActive int
 	}{
 		{
 			name:       "all active",
-			statuses:   []intent.IntentStatus{intent.StatusActive, intent.StatusActive, intent.StatusActive},
+			statuses:   []intent.IntentStatus{intent.IntentActive, intent.IntentActive, intent.IntentActive},
 			wantActive: 3,
 		},
 		{
 			name:       "mixed active and completed",
-			statuses:   []intent.IntentStatus{intent.StatusActive, intent.StatusCompleted, intent.StatusActive},
+			statuses:   []intent.IntentStatus{intent.IntentActive, intent.IntentCompleted, intent.IntentActive},
 			wantActive: 2,
 		},
 		{
 			name:       "all completed",
-			statuses:   []intent.IntentStatus{intent.StatusCompleted, intent.StatusCompleted},
+			statuses:   []intent.IntentStatus{intent.IntentCompleted, intent.IntentCompleted},
 			wantActive: 0,
 		},
 		{
 			name:       "active and paused",
-			statuses:   []intent.IntentStatus{intent.StatusActive, intent.StatusPaused, intent.StatusActive},
+			statuses:   []intent.IntentStatus{intent.IntentActive, intent.IntentPaused, intent.IntentActive},
 			wantActive: 2,
 		},
 	}
@@ -66,13 +80,16 @@ func TestIntentStore_CreateAndActive(t *testing.T) {
 			ctx := context.Background()
 
 			for i, status := range tc.statuses {
-				in, err := st.Create(ctx, "desc", "cond", "action")
-				require.NoError(t, err)
-				require.NotEmpty(t, in.ID)
+				id := createIntent(t, st, ctx, "desc", "cond", "action")
 
-				if status != intent.StatusActive {
-					in.Status = status
-					require.NoError(t, st.Update(ctx, in))
+				if status != intent.IntentActive {
+					require.NoError(t, st.Update(ctx, intent.Intent{
+						ID:          id,
+						Description: "desc",
+						Condition:   "cond",
+						Action:      "action",
+						Status:      status,
+					}))
 				}
 				_ = i
 			}
@@ -81,7 +98,7 @@ func TestIntentStore_CreateAndActive(t *testing.T) {
 			require.NoError(t, err)
 			assert.Len(t, active, tc.wantActive)
 			for _, a := range active {
-				assert.Equal(t, intent.StatusActive, a.Status)
+				assert.Equal(t, intent.IntentActive, a.Status)
 			}
 		})
 	}
@@ -91,27 +108,27 @@ func TestIntentStore_Due(t *testing.T) {
 	now := time.Now()
 
 	cases := []struct {
-		name          string
-		nextCheck     time.Time
-		status        intent.IntentStatus
-		wantInDue     bool
+		name      string
+		nextCheck time.Time
+		status    intent.IntentStatus
+		wantInDue bool
 	}{
 		{
 			name:      "past NextCheck appears in Due",
 			nextCheck: now.Add(-1 * time.Minute),
-			status:    intent.StatusActive,
+			status:    intent.IntentActive,
 			wantInDue: true,
 		},
 		{
 			name:      "future NextCheck does not appear in Due",
 			nextCheck: now.Add(10 * time.Minute),
-			status:    intent.StatusActive,
+			status:    intent.IntentActive,
 			wantInDue: false,
 		},
 		{
 			name:      "completed status with past NextCheck does not appear in Due",
 			nextCheck: now.Add(-1 * time.Minute),
-			status:    intent.StatusCompleted,
+			status:    intent.IntentCompleted,
 			wantInDue: false,
 		},
 	}
@@ -122,20 +139,21 @@ func TestIntentStore_Due(t *testing.T) {
 			st := intent.NewStore(db)
 			ctx := context.Background()
 
-			in, err := st.Create(ctx, "desc", "cond", "action")
-			require.NoError(t, err)
-			require.NotEmpty(t, in.ID)
-
-			in.NextCheck = tc.nextCheck
-			in.Status = tc.status
-			require.NoError(t, st.Update(ctx, in))
+			id := createIntent(t, st, ctx, "desc", "cond", "action")
+			require.NoError(t, st.Update(ctx, intent.Intent{
+				ID:        id,
+				Condition: "cond",
+				Action:    "action",
+				NextCheck: tc.nextCheck,
+				Status:    tc.status,
+			}))
 
 			due, err := st.Due(ctx)
 			require.NoError(t, err)
 
 			found := false
 			for _, d := range due {
-				if d.ID == in.ID {
+				if d.ID == id {
 					found = true
 				}
 			}
@@ -149,8 +167,7 @@ func TestIntentStore_Complete(t *testing.T) {
 	st := intent.NewStore(db)
 	ctx := context.Background()
 
-	in, err := st.Create(ctx, "to complete", "cond", "action")
-	require.NoError(t, err)
+	id := createIntent(t, st, ctx, "to complete", "cond", "action")
 
 	// Verify it appears in Active before completing.
 	active, err := st.Active(ctx)
@@ -158,7 +175,7 @@ func TestIntentStore_Complete(t *testing.T) {
 	require.Len(t, active, 1)
 
 	// Complete it.
-	require.NoError(t, st.Complete(ctx, in.ID))
+	require.NoError(t, st.Complete(ctx, id))
 
 	// Verify it is gone from Active.
 	active, err = st.Active(ctx)
@@ -172,16 +189,19 @@ func TestIntentStore_Update(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().Truncate(time.Millisecond)
 
-	in, err := st.Create(ctx, "original desc", "original cond", "original action")
-	require.NoError(t, err)
+	id := createIntent(t, st, ctx, "original desc", "original cond", "original action")
 
 	// Update all mutable fields.
-	in.Description = "updated desc"
-	in.Condition = "updated cond"
-	in.Action = "updated action"
-	in.LastChecked = now.Add(-5 * time.Minute)
-	in.NextCheck = now.Add(-1 * time.Millisecond) // make it due
-	require.NoError(t, st.Update(ctx, in))
+	updated := intent.Intent{
+		ID:          id,
+		Description: "updated desc",
+		Condition:   "updated cond",
+		Action:      "updated action",
+		Status:      intent.IntentActive,
+		LastChecked: now.Add(-5 * time.Minute),
+		NextCheck:   now.Add(-1 * time.Millisecond), // make it due
+	}
+	require.NoError(t, st.Update(ctx, updated))
 
 	// Verify changes via Due()
 	due, err := st.Due(ctx)
@@ -189,12 +209,12 @@ func TestIntentStore_Update(t *testing.T) {
 	require.Len(t, due, 1)
 
 	got := due[0]
-	assert.Equal(t, in.ID, got.ID)
+	assert.Equal(t, id, got.ID)
 	assert.Equal(t, "updated desc", got.Description)
 	assert.Equal(t, "updated cond", got.Condition)
 	assert.Equal(t, "updated action", got.Action)
 
 	// Times are stored as unix ms so truncate for comparison.
-	assert.Equal(t, in.LastChecked.UnixMilli(), got.LastChecked.UnixMilli())
-	assert.Equal(t, in.NextCheck.UnixMilli(), got.NextCheck.UnixMilli())
+	assert.Equal(t, updated.LastChecked.UnixMilli(), got.LastChecked.UnixMilli())
+	assert.Equal(t, updated.NextCheck.UnixMilli(), got.NextCheck.UnixMilli())
 }

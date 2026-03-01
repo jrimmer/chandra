@@ -33,11 +33,23 @@ func newTestDB(t *testing.T) *sql.DB {
 }
 
 // createDueIntent creates an intent with NextCheck in the past so it is immediately due.
-func createDueIntent(t *testing.T, st intent.IntentStore, ctx context.Context) *intent.Intent {
+func createDueIntent(t *testing.T, st intent.IntentStore, ctx context.Context) intent.Intent {
 	t.Helper()
-	in, err := st.Create(ctx, "due intent", "cond", "do something")
-	require.NoError(t, err)
-	in.NextCheck = time.Now().Add(-1 * time.Minute)
+	id := store.NewID()
+	require.NoError(t, st.Create(ctx, intent.Intent{
+		ID:          id,
+		Description: "due intent",
+		Condition:   "cond",
+		Action:      "do something",
+	}))
+	in := intent.Intent{
+		ID:          id,
+		Description: "due intent",
+		Condition:   "cond",
+		Action:      "do something",
+		Status:      intent.IntentActive,
+		NextCheck:   time.Now().Add(-1 * time.Minute),
+	}
 	require.NoError(t, st.Update(ctx, in))
 	return in
 }

@@ -50,13 +50,11 @@ func TestIntegration_CBM_Adversarial(t *testing.T) {
 	// 3. Seed 50 active intents.
 	intentStore := intent.NewStore(db)
 	for i := 0; i < 50; i++ {
-		_, err := intentStore.Create(
-			ctx,
-			fmt.Sprintf("adversarial intent %d about monitoring system health", i),
-			"on_schedule",
-			fmt.Sprintf("check metric %d", i),
-		)
-		if err != nil {
+		if err := intentStore.Create(ctx, intent.Intent{
+			Description: fmt.Sprintf("adversarial intent %d about monitoring system health", i),
+			Condition:   "on_schedule",
+			Action:      fmt.Sprintf("check metric %d", i),
+		}); err != nil {
 			t.Fatalf("intentStore.Create (intent %d): %v", i, err)
 		}
 	}

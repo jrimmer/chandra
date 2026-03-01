@@ -95,13 +95,11 @@ var _ semantic.SemanticStore = (*mockSemantic)(nil)
 // mockIntent is a no-op intent store.
 type mockIntent struct{}
 
-func (m *mockIntent) Create(_ context.Context, _, _, _ string) (*intent.Intent, error) {
-	return nil, nil
-}
-func (m *mockIntent) Update(_ context.Context, _ *intent.Intent) error    { return nil }
-func (m *mockIntent) Active(_ context.Context) ([]*intent.Intent, error)  { return nil, nil }
-func (m *mockIntent) Due(_ context.Context) ([]*intent.Intent, error)     { return nil, nil }
-func (m *mockIntent) Complete(_ context.Context, _ string) error           { return nil }
+func (m *mockIntent) Create(_ context.Context, _ intent.Intent) error      { return nil }
+func (m *mockIntent) Update(_ context.Context, _ intent.Intent) error      { return nil }
+func (m *mockIntent) Active(_ context.Context) ([]intent.Intent, error)    { return nil, nil }
+func (m *mockIntent) Due(_ context.Context) ([]intent.Intent, error)       { return nil, nil }
+func (m *mockIntent) Complete(_ context.Context, _ string) error            { return nil }
 
 var _ intent.IntentStore = (*mockIntent)(nil)
 
@@ -213,7 +211,8 @@ var _ actionlog.Log = (*mockActionLog)(nil)
 // mockChannel is a no-op channel.
 type mockChannel struct{}
 
-func (m *mockChannel) Listen(_ context.Context) (<-chan channels.InboundMessage, error) { return nil, nil }
+func (m *mockChannel) ID() string                                                        { return "mock" }
+func (m *mockChannel) Listen(_ context.Context, _ chan<- channels.InboundMessage) error { return nil }
 func (m *mockChannel) Send(_ context.Context, _ channels.OutboundMessage) error         { return nil }
 func (m *mockChannel) React(_ context.Context, _, _ string) error                       { return nil }
 

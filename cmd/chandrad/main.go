@@ -259,13 +259,13 @@ func run(ctx context.Context, safeMode bool) error {
 	// -------------------------------------------------------------------
 	// Step 11: Start Discord channel listener (if configured).
 	//
-	// dc.Listen is called here to start the websocket and return a buffered
-	// channel. The processing goroutine is launched after Steps 12 and 13
-	// so that sessionMgr and agentLoop are fully assigned before the goroutine
-	// reads them — satisfying the Go memory model without any extra sync.
+	// dc.Listen is called here to open the websocket and begin writing to the
+	// inbound channel. The processing goroutine is launched after Steps 12
+	// and 13 so that sessionMgr and agentLoop are fully assigned before the
+	// goroutine reads them — satisfying the Go memory model without extra sync.
 	// -------------------------------------------------------------------
 	var discordChannel channels.Channel
-	var discordCh <-chan channels.InboundMessage
+	var discordInbound chan channels.InboundMessage
 	var discordDC *discord.Discord
 	discordConfigured := !safeMode && cfg.Channels.Discord != nil && cfg.Channels.Discord.Token != ""
 	if discordConfigured {
@@ -274,12 +274,12 @@ func run(ctx context.Context, safeMode bool) error {
 		if dcErr != nil {
 			return fmt.Errorf("chandrad: discord init: %w", dcErr)
 		}
-		ch, listenErr := dc.Listen(ctx)
-		if listenErr != nil {
+		inbound := make(chan channels.InboundMessage, 64)
+		if listenErr := dc.Listen(ctx, inbound); listenErr != nil {
 			return fmt.Errorf("chandrad: discord listen: %w", listenErr)
 		}
 		discordChannel = dc
-		discordCh = ch
+		discordInbound = inbound
 		discordDC = dc
 	} else {
 		slog.Info("chandrad: Discord not configured, skipping")
@@ -319,26 +319,34 @@ func run(ctx context.Context, safeMode bool) error {
 	// are fully assigned above so the goroutine sees their final values.
 	if discordConfigured && discordDC != nil {
 		go func() {
-			for msg := range discordCh {
-				sess, sessErr := sessionMgr.GetOrCreate(ctx, msg.ChannelID, msg.UserID)
-				if sessErr != nil {
-					slog.Error("chandrad: discord: session error", "err", sessErr)
-					continue
+			for {
+				select {
+				case msg, ok := <-discordInbound:
+					if !ok {
+						return
+					}
+					sess, sessErr := sessionMgr.GetOrCreate(ctx, msg.ChannelID, msg.UserID)
+					if sessErr != nil {
+						slog.Error("chandrad: discord: session error", "err", sessErr)
+						continue
+					}
+					if agentLoop == nil {
+						slog.Warn("chandrad: discord: agent loop not available, dropping message")
+						continue
+					}
+					resp, runErr := agentLoop.Run(ctx, sess, msg)
+					if runErr != nil {
+						slog.Error("chandrad: agent loop error", "err", runErr)
+						continue
+					}
+					_ = discordDC.Send(ctx, channels.OutboundMessage{
+						ChannelID: msg.ChannelID,
+						Content:   resp,
+						ReplyToID: msg.ID,
+					})
+				case <-ctx.Done():
+					return
 				}
-				if agentLoop == nil {
-					slog.Warn("chandrad: discord: agent loop not available, dropping message")
-					continue
-				}
-				resp, runErr := agentLoop.Run(ctx, sess, msg)
-				if runErr != nil {
-					slog.Error("chandrad: agent loop error", "err", runErr)
-					continue
-				}
-				_ = discordDC.Send(ctx, channels.OutboundMessage{
-					ChannelID: msg.ChannelID,
-					Content:   resp,
-					ReplyToID: msg.ID,
-				})
 			}
 		}()
 	}
@@ -389,8 +397,8 @@ func run(ctx context.Context, safeMode bool) error {
 	mgr.Stop()
 	slog.Info("chandrad: session manager stopped")
 
-	// Discord channel listener goroutine exits naturally when ctx is cancelled
-	// (discord.Listen closes the output channel on ctx.Done). No explicit Stop needed.
+	// Discord processing goroutine exits naturally when ctx is cancelled.
+	// No explicit Stop needed.
 	if discordChannel != nil {
 		slog.Info("chandrad: Discord channel listener stopped (context cancelled)")
 	}
@@ -622,11 +630,14 @@ func registerHandlers(
 		if p.Description == "" {
 			return nil, fmt.Errorf("intent.add: description is required")
 		}
-		in, err := inStore.Create(ctx, p.Description, "always", p.Description)
-		if err != nil {
+		if err := inStore.Create(ctx, intent.Intent{
+			Description: p.Description,
+			Condition:   "always",
+			Action:      p.Description,
+		}); err != nil {
 			return nil, fmt.Errorf("intent.add: %w", err)
 		}
-		return in, nil
+		return map[string]any{"ok": true}, nil
 	})
 
 	// intent.complete

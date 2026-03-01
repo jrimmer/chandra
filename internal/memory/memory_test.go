@@ -42,13 +42,11 @@ var _ semantic.SemanticStore = (*mockSemantic)(nil)
 
 type mockIntent struct{}
 
-func (m *mockIntent) Create(_ context.Context, _, _, _ string) (*intent.Intent, error) {
-	return nil, nil
-}
-func (m *mockIntent) Update(_ context.Context, _ *intent.Intent) error  { return nil }
-func (m *mockIntent) Active(_ context.Context) ([]*intent.Intent, error) { return nil, nil }
-func (m *mockIntent) Due(_ context.Context) ([]*intent.Intent, error)    { return nil, nil }
-func (m *mockIntent) Complete(_ context.Context, _ string) error          { return nil }
+func (m *mockIntent) Create(_ context.Context, _ intent.Intent) error       { return nil }
+func (m *mockIntent) Update(_ context.Context, _ intent.Intent) error       { return nil }
+func (m *mockIntent) Active(_ context.Context) ([]intent.Intent, error)     { return nil, nil }
+func (m *mockIntent) Due(_ context.Context) ([]intent.Intent, error)        { return nil, nil }
+func (m *mockIntent) Complete(_ context.Context, _ string) error            { return nil }
 
 var _ intent.IntentStore = (*mockIntent)(nil)
 

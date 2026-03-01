@@ -7,6 +7,7 @@ import (
 
 	"github.com/jrimmer/chandra/internal/memory/intent"
 	"github.com/jrimmer/chandra/internal/scheduler"
+	"github.com/jrimmer/chandra/store"
 )
 
 // TestIntegration_SchedulerFiresIntent verifies that a due intent is picked up
@@ -20,15 +21,26 @@ func TestIntegration_SchedulerFiresIntent(t *testing.T) {
 
 	// 2. Create intent store and seed an already-due intent.
 	intentStore := intent.NewStore(db)
-	created, err := intentStore.Create(ctx, "integration test intent", "always", "say hello")
-	if err != nil {
+	createdID := store.NewID()
+	if err := intentStore.Create(ctx, intent.Intent{
+		ID:          createdID,
+		Description: "integration test intent",
+		Condition:   "always",
+		Action:      "say hello",
+	}); err != nil {
 		t.Fatalf("intentStore.Create: %v", err)
 	}
 
 	// Back-date NextCheck so the intent is immediately due.
-	created.NextCheck = time.Now().Add(-1 * time.Minute)
-	created.LastChecked = time.Now().Add(-2 * time.Minute)
-	if err := intentStore.Update(ctx, created); err != nil {
+	if err := intentStore.Update(ctx, intent.Intent{
+		ID:          createdID,
+		Description: "integration test intent",
+		Condition:   "always",
+		Action:      "say hello",
+		Status:      intent.IntentActive,
+		NextCheck:   time.Now().Add(-1 * time.Minute),
+		LastChecked: time.Now().Add(-2 * time.Minute),
+	}); err != nil {
 		t.Fatalf("intentStore.Update (backdating): %v", err)
 	}
 
@@ -50,8 +62,8 @@ func TestIntegration_SchedulerFiresIntent(t *testing.T) {
 	select {
 	case turn := <-sched.Turns():
 		// 6. Assert: turn was emitted with the correct IntentID.
-		if turn.IntentID != created.ID {
-			t.Errorf("expected IntentID %q, got %q", created.ID, turn.IntentID)
+		if turn.IntentID != createdID {
+			t.Errorf("expected IntentID %q, got %q", createdID, turn.IntentID)
 		}
 		if turn.Prompt != "say hello" {
 			t.Errorf("expected prompt %q, got %q", "say hello", turn.Prompt)

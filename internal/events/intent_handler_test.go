@@ -59,7 +59,7 @@ func TestEventIntentHandler_CreatesIntent(t *testing.T) {
 	require.NoError(t, bus.Publish(context.Background(), events.Event{Topic: "homelab/sensor/temp", Payload: []byte(`{"value":25.3}`), Source: "mqtt"}))
 
 	// Wait for the intent to appear in the store.
-	var intents []*intent.Intent
+	var intents []intent.Intent
 	assert.Eventually(t, func() bool {
 		var err error
 		intents, err = is.Active(context.Background())
@@ -132,15 +132,15 @@ type failingIntentStore struct {
 
 var _ intent.IntentStore = (*failingIntentStore)(nil)
 
-func (f *failingIntentStore) Create(_ context.Context, _, _, _ string) (*intent.Intent, error) {
+func (f *failingIntentStore) Create(_ context.Context, _ intent.Intent) error {
 	f.calls.Add(1)
-	return nil, errors.New("queue full")
+	return errors.New("queue full")
 }
-func (f *failingIntentStore) Update(_ context.Context, _ *intent.Intent) error { return nil }
-func (f *failingIntentStore) Active(_ context.Context) ([]*intent.Intent, error) {
+func (f *failingIntentStore) Update(_ context.Context, _ intent.Intent) error { return nil }
+func (f *failingIntentStore) Active(_ context.Context) ([]intent.Intent, error) {
 	return nil, nil
 }
-func (f *failingIntentStore) Due(_ context.Context) ([]*intent.Intent, error) { return nil, nil }
+func (f *failingIntentStore) Due(_ context.Context) ([]intent.Intent, error) { return nil, nil }
 func (f *failingIntentStore) Complete(_ context.Context, _ string) error {
 	return nil
 }

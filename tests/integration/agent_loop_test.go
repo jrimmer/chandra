@@ -83,11 +83,10 @@ var _ provider.EmbeddingProvider = (*fixedEmbedder)(nil)
 
 type noopChannel struct{}
 
-func (c *noopChannel) Listen(_ context.Context) (<-chan channels.InboundMessage, error) {
-	return nil, nil
-}
-func (c *noopChannel) Send(_ context.Context, _ channels.OutboundMessage) error { return nil }
-func (c *noopChannel) React(_ context.Context, _, _ string) error                { return nil }
+func (c *noopChannel) ID() string                                                         { return "noop" }
+func (c *noopChannel) Listen(_ context.Context, _ chan<- channels.InboundMessage) error  { return nil }
+func (c *noopChannel) Send(_ context.Context, _ channels.OutboundMessage) error          { return nil }
+func (c *noopChannel) React(_ context.Context, _, _ string) error                        { return nil }
 
 var _ channels.Channel = (*noopChannel)(nil)
 

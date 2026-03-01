@@ -14,9 +14,9 @@ import (
 type IntentStatus string
 
 const (
-	StatusActive    IntentStatus = "active"
-	StatusPaused    IntentStatus = "paused"
-	StatusCompleted IntentStatus = "completed"
+	IntentActive    IntentStatus = "active"
+	IntentPaused    IntentStatus = "paused"
+	IntentCompleted IntentStatus = "completed"
 )
 
 // Intent represents a persistent agent intent with scheduling metadata.
@@ -33,10 +33,10 @@ type Intent struct {
 
 // IntentStore defines the persistence contract for intents.
 type IntentStore interface {
-	Create(ctx context.Context, description, condition, action string) (*Intent, error)
-	Update(ctx context.Context, intent *Intent) error
-	Active(ctx context.Context) ([]*Intent, error)
-	Due(ctx context.Context) ([]*Intent, error)
+	Create(ctx context.Context, intent Intent) error
+	Update(ctx context.Context, intent Intent) error
+	Active(ctx context.Context) ([]Intent, error)
+	Due(ctx context.Context) ([]Intent, error)
 	Complete(ctx context.Context, id string) error
 }
 
@@ -53,41 +53,36 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{db: db}
 }
 
-// Create inserts a new intent with StatusActive and NextCheck set to now.
-func (s *Store) Create(ctx context.Context, description, condition, action string) (*Intent, error) {
+// Create inserts a new intent with IntentActive and NextCheck set to now.
+// If intent.ID is empty a new ULID is generated. Timestamps are always set
+// to the current time regardless of what is in the provided intent value.
+func (s *Store) Create(ctx context.Context, intent Intent) error {
 	now := time.Now().UTC()
-	id := store.NewID()
+	id := intent.ID
+	if id == "" {
+		id = store.NewID()
+	}
 
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO intents (id, description, condition, action, status, created_at, last_checked, next_check)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		id,
-		description,
-		condition,
-		action,
-		string(StatusActive),
+		intent.Description,
+		intent.Condition,
+		intent.Action,
+		string(IntentActive),
 		now.UnixMilli(),
 		now.UnixMilli(),
 		now.UnixMilli(),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("intent: create: %w", err)
+		return fmt.Errorf("intent: create: %w", err)
 	}
-
-	return &Intent{
-		ID:          id,
-		Description: description,
-		Condition:   condition,
-		Action:      action,
-		Status:      StatusActive,
-		CreatedAt:   now,
-		LastChecked: now,
-		NextCheck:   now,
-	}, nil
+	return nil
 }
 
 // Update modifies all mutable fields of an existing intent.
-func (s *Store) Update(ctx context.Context, intent *Intent) error {
+func (s *Store) Update(ctx context.Context, intent Intent) error {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE intents
 		 SET description = ?, condition = ?, action = ?, status = ?,
@@ -114,13 +109,13 @@ func (s *Store) Update(ctx context.Context, intent *Intent) error {
 	return nil
 }
 
-// Active returns all intents with StatusActive.
-func (s *Store) Active(ctx context.Context) ([]*Intent, error) {
+// Active returns all intents with IntentActive.
+func (s *Store) Active(ctx context.Context) ([]Intent, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, description, condition, action, status, created_at, last_checked, next_check
 		 FROM intents
 		 WHERE status = ?`,
-		string(StatusActive),
+		string(IntentActive),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("intent: active: %w", err)
@@ -131,12 +126,12 @@ func (s *Store) Active(ctx context.Context) ([]*Intent, error) {
 }
 
 // Due returns all active intents whose next_check is at or before now.
-func (s *Store) Due(ctx context.Context) ([]*Intent, error) {
+func (s *Store) Due(ctx context.Context) ([]Intent, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, description, condition, action, status, created_at, last_checked, next_check
 		 FROM intents
 		 WHERE status = ? AND next_check <= ?`,
-		string(StatusActive),
+		string(IntentActive),
 		time.Now().UnixMilli(),
 	)
 	if err != nil {
@@ -147,11 +142,11 @@ func (s *Store) Due(ctx context.Context) ([]*Intent, error) {
 	return scanIntents(rows)
 }
 
-// Complete sets the status of the identified intent to StatusCompleted.
+// Complete sets the status of the identified intent to IntentCompleted.
 func (s *Store) Complete(ctx context.Context, id string) error {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE intents SET status = ? WHERE id = ?`,
-		string(StatusCompleted),
+		string(IntentCompleted),
 		id,
 	)
 	if err != nil {
@@ -167,10 +162,10 @@ func (s *Store) Complete(ctx context.Context, id string) error {
 	return nil
 }
 
-// scanIntents reads all rows from a query result into a slice of Intent pointers.
+// scanIntents reads all rows from a query result into a slice of Intent values.
 // last_checked and next_check are nullable in the schema so we use sql.NullInt64.
-func scanIntents(rows *sql.Rows) ([]*Intent, error) {
-	var intents []*Intent
+func scanIntents(rows *sql.Rows) ([]Intent, error) {
+	var intents []Intent
 	for rows.Next() {
 		var in Intent
 		var statusStr string
@@ -199,7 +194,7 @@ func scanIntents(rows *sql.Rows) ([]*Intent, error) {
 			in.NextCheck = time.UnixMilli(nextCheckMs.Int64).UTC()
 		}
 
-		intents = append(intents, &in)
+		intents = append(intents, in)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("intent: iterate rows: %w", err)

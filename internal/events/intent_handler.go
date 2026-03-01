@@ -72,20 +72,14 @@ func (h *EventIntentHandler) handle(ctx context.Context, ev Event) error {
 	h.pruneSeenLocked()
 	h.mu.Unlock()
 
-	in, err := h.intentStore.Create(ctx,
-		fmt.Sprintf("event:%s", ev.Topic),
-		"event",
-		string(ev.Payload),
-	)
+	err := h.intentStore.Create(ctx, intent.Intent{
+		Description: fmt.Sprintf("event:%s", ev.Topic),
+		Condition:   "event",
+		Action:      string(ev.Payload),
+		NextCheck:   time.Now(),
+	})
 	if err != nil {
 		slog.Warn("events: intent create failed, dropping event", "topic", ev.Topic, "error", err)
-		return nil
-	}
-
-	// Trigger immediate scheduling by setting NextCheck to now.
-	in.NextCheck = time.Now()
-	if err := h.intentStore.Update(ctx, in); err != nil {
-		slog.Warn("events: intent update failed", "topic", ev.Topic, "error", err)
 	}
 	return nil
 }
