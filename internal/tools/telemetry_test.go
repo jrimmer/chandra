@@ -12,13 +12,6 @@ import (
 	"github.com/jrimmer/chandra/store"
 )
 
-// insertTelemetryRow inserts a single row into tool_telemetry.
-func insertTelemetryRow(t *testing.T, db interface {
-	Exec(query string, args ...any) (interface{ LastInsertId() (int64, error) }, error)
-}, toolName string, calledAt int64, latencyMs int64, success bool, errText string) {
-	t.Helper()
-}
-
 func TestReliability_ComputesFromTelemetry(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()

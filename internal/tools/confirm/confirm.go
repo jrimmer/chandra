@@ -117,45 +117,40 @@ func (s *Store) Create(ctx context.Context, toolCall string, expiresIn time.Dura
 // and ErrNotFound if no such confirmation exists.
 func (s *Store) Approve(ctx context.Context, id string) error {
 	now := time.Now().UnixMilli()
-
-	// Fetch current state first.
-	c, err := s.Get(ctx, id)
-	if err != nil {
-		return err
-	}
-
-	if c.ExpiresAt.Before(time.Now().UTC()) {
-		return ErrExpired
-	}
-
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE tool_confirmations SET status = ?, updated_at = ?
 		 WHERE id = ? AND status = 'pending' AND expires_at > ?`,
-		string(StatusApproved), now,
-		id, now,
+		string(StatusApproved), now, id, now,
 	)
 	if err != nil {
 		return fmt.Errorf("confirm: approve: %w", err)
 	}
-
 	affected, err := result.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("confirm: approve rows affected: %w", err)
 	}
 	if affected == 0 {
-		// Re-check: if it expired between Get and Update, report ErrExpired.
-		return ErrExpired
+		// Re-query to determine why (not found, expired, or wrong status)
+		c, err := s.Get(ctx, id)
+		if err != nil {
+			return err // ErrNotFound if deleted
+		}
+		if time.Now().UnixMilli() >= c.ExpiresAt.UnixMilli() || c.Status == StatusExpired {
+			return ErrExpired
+		}
+		return fmt.Errorf("confirm: cannot approve, current status: %s", c.Status)
 	}
 	return nil
 }
 
-// Reject transitions a confirmation to rejected regardless of expiry.
+// Reject transitions a pending or expired confirmation to rejected.
+// It will not overwrite an already-approved or already-rejected confirmation.
 func (s *Store) Reject(ctx context.Context, id string) error {
 	now := time.Now().UnixMilli()
 
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE tool_confirmations SET status = ?, updated_at = ?
-		 WHERE id = ?`,
+		 WHERE id = ? AND status IN ('pending', 'expired')`,
 		string(StatusRejected), now, id,
 	)
 	if err != nil {
@@ -166,7 +161,12 @@ func (s *Store) Reject(ctx context.Context, id string) error {
 		return fmt.Errorf("confirm: reject rows affected: %w", err)
 	}
 	if affected == 0 {
-		return ErrNotFound
+		// Re-query to distinguish not-found from terminal state.
+		c, err := s.Get(ctx, id)
+		if err != nil {
+			return err // ErrNotFound if deleted
+		}
+		return fmt.Errorf("confirm: cannot reject, current status: %s", c.Status)
 	}
 	return nil
 }

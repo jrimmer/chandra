@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -37,6 +38,9 @@ type executor struct {
 // NewExecutor creates an Executor backed by the given registry and database.
 // defaultTimeout is applied to each individual tool call.
 func NewExecutor(registry Registry, db *sql.DB, defaultTimeout time.Duration) *executor {
+	if db == nil {
+		panic("tools: NewExecutor requires non-nil db")
+	}
 	return &executor{
 		registry:       registry,
 		db:             db,
@@ -127,12 +131,14 @@ func (e *executor) dispatchOne(ctx context.Context, call pkg.ToolCall) pkg.ToolR
 
 		// Decide whether to retry based on error kind.
 		if isTransient(execErr) && attempts < maxAttempts {
+			timer := time.NewTimer(backoffs[attempts-1])
 			select {
 			case <-ctx.Done():
 				// Parent context cancelled; abort retries.
+				timer.Stop()
 				execErr = ctx.Err()
 				goto done
-			case <-time.After(backoffs[attempts-1]):
+			case <-timer.C:
 			}
 			continue
 		}
@@ -208,10 +214,12 @@ func (e *executor) recordTelemetry(toolName string, success bool, latencyMs int6
 		errVal = errText
 	}
 
-	// Errors in telemetry recording are logged but do not affect the caller.
-	_, _ = e.db.Exec(
+	// Use a background context so a cancelled per-call context doesn't drop telemetry.
+	if _, err := e.db.ExecContext(context.Background(),
 		`INSERT INTO tool_telemetry (id, tool_name, called_at, latency_ms, success, error, retries)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		id, toolName, calledAt, latencyMs, successInt, errVal, retries,
-	)
+	); err != nil {
+		slog.Warn("tools: failed to record telemetry", "tool", toolName, "error", err)
+	}
 }
