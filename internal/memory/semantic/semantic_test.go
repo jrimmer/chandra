@@ -183,6 +183,34 @@ func TestSemanticStore_DimensionValidation(t *testing.T) {
 	assert.Contains(t, err.Error(), "1536")
 }
 
+func TestSemanticStore_PresetIDAndImportance(t *testing.T) {
+	db := newTestDB(t)
+	embedder := &mockEmbedder{
+		dims: 1536,
+		vectors: map[string][]float32{
+			"preset content": makeVec(1536, 1, 1.0),
+		},
+	}
+	s, err := semantic.NewStore(db, embedder)
+	require.NoError(t, err)
+
+	entry := pkg.MemoryEntry{
+		ID:         "preset-id-123",
+		Content:    "preset content",
+		Source:     "conversation",
+		Timestamp:  time.Now(),
+		Importance: 0.9, // pre-set, should not be overridden
+	}
+	err = s.Store(context.Background(), entry)
+	require.NoError(t, err)
+
+	results, err := s.Query(context.Background(), makeVec(1536, 1, 1.0), 1)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "preset-id-123", results[0].ID)
+	assert.Equal(t, float32(0.9), results[0].Importance)
+}
+
 func TestSemanticStore_ImportanceHeuristic(t *testing.T) {
 	tests := []struct {
 		name        string

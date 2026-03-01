@@ -93,6 +93,9 @@ func (m *Manager) Assemble(
 ) (ContextWindow, error) {
 	// Step 1: reserve tokens for tools.
 	remaining := budget - toolTokens
+	if remaining < 0 {
+		remaining = 0
+	}
 
 	// Step 2 & 3: add fixed candidates, dropping oldest if necessary.
 	fixedMsgs, fixedTokens := fitFixed(fixed, remaining)
@@ -110,12 +113,19 @@ func (m *Manager) Assemble(
 	}
 
 	// Step 5 & 6: score and sort ranked candidates.
+	// Pre-compute lowercased intent keywords to avoid repeated allocations
+	// inside the per-candidate scoring loop.
+	intentKeywords := make([]string, len(intents))
+	for i, intent := range intents {
+		intentKeywords[i] = strings.ToLower(intent.Description)
+	}
+
 	now := time.Now()
 	scored := make([]scoredCandidate, len(ranked))
 	for i, c := range ranked {
 		scored[i] = scoredCandidate{
 			candidate: c,
-			score:     m.computeScore(c, now, intents),
+			score:     m.computeScore(c, now, intentKeywords),
 		}
 	}
 	sort.SliceStable(scored, func(i, j int) bool {
@@ -140,7 +150,7 @@ func (m *Manager) Assemble(
 
 	// Step 9: assemble final window.
 	allMsgs := append(fixedMsgs, rankedMsgs...) //nolint:gocritic
-	totalTokens := (budget - toolTokens - remaining) + toolTokens
+	totalTokens := budget - remaining
 
 	return ContextWindow{
 		Messages:    allMsgs,
@@ -157,11 +167,13 @@ type scoredCandidate struct {
 }
 
 // computeScore computes the weighted ranking score for a candidate.
-func (m *Manager) computeScore(c ContextCandidate, now time.Time, intents []Intent) float32 {
+// intentKeywords is a pre-lowercased slice of intent description strings.
+func (m *Manager) computeScore(c ContextCandidate, now time.Time, intentKeywords []string) float32 {
 	// Intent boost: if any active intent's description appears in content.
 	priority := c.Priority
-	for _, intent := range intents {
-		if strings.Contains(strings.ToLower(c.Content), strings.ToLower(intent.Description)) {
+	lowerContent := strings.ToLower(c.Content)
+	for _, kw := range intentKeywords {
+		if strings.Contains(lowerContent, kw) {
 			priority += 0.1
 			if priority > 1.0 {
 				priority = 1.0
@@ -171,10 +183,16 @@ func (m *Manager) computeScore(c ContextCandidate, now time.Time, intents []Inte
 	}
 
 	// Recency score: linear decay from 1.0 to 0.0 over decayHours.
-	hoursSince := float32(now.Sub(c.Recency).Hours())
-	recencyScore := float32(1.0) - (hoursSince / m.recencyDecayHours)
-	if recencyScore < 0 {
+	var recencyScore float32
+	if m.recencyDecayHours <= 0 {
 		recencyScore = 0
+	} else {
+		hoursSince := float32(now.Sub(c.Recency).Hours())
+		rs := float32(1.0) - (hoursSince / m.recencyDecayHours)
+		if rs < 0 {
+			rs = 0
+		}
+		recencyScore = rs
 	}
 
 	// Importance: if zero use priority as the stand-in.
@@ -206,11 +224,8 @@ func fitFixed(fixed []ContextCandidate, remaining int) ([]provider.Message, int)
 	}
 
 	// Drop oldest (lowest Recency) until under budget.
+	originalLen := len(candidates)
 	for total > remaining && len(candidates) > 0 {
-		slog.Warn("budget: fixed candidates exceed remaining budget, dropping oldest",
-			"total_tokens", total,
-			"remaining", remaining,
-		)
 		// Find the index of the oldest candidate.
 		oldest := 0
 		for i := 1; i < len(candidates); i++ {
@@ -221,6 +236,11 @@ func fitFixed(fixed []ContextCandidate, remaining int) ([]provider.Message, int)
 		total -= candidates[oldest].Tokens
 		candidates = append(candidates[:oldest], candidates[oldest+1:]...)
 	}
+	if len(candidates) < originalLen {
+		slog.Warn("budget: dropped fixed candidates to fit budget",
+			"dropped", originalLen-len(candidates),
+		)
+	}
 
 	msgs := make([]provider.Message, len(candidates))
 	for i, c := range candidates {
@@ -230,10 +250,13 @@ func fitFixed(fixed []ContextCandidate, remaining int) ([]provider.Message, int)
 }
 
 // candidateToMessage converts a ContextCandidate to a provider.Message,
-// mapping "memory" and "identity" roles to "user".
+// mapping "memory" to "user" and "identity" to "system".
 func candidateToMessage(c ContextCandidate) provider.Message {
 	role := c.Role
-	if role == "memory" || role == "identity" {
+	switch role {
+	case "identity":
+		role = "system"
+	case "memory":
 		role = "user"
 	}
 	return provider.Message{Role: role, Content: c.Content}
