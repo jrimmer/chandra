@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -40,11 +41,14 @@ type manager struct {
 
 	// mu serializes GetOrCreate so that two concurrent callers for the same
 	// channel/user pair do not both attempt to INSERT a new session row.
+	// It also protects mutations to cached *Session fields (e.g. LastActive).
 	mu    sync.Mutex
 	cache sync.Map // key: "channelID:userID" → *Session
 
-	cancel context.CancelFunc
-	done   chan struct{}
+	// startMu protects cancel and done to prevent data races between Start/Stop.
+	startMu sync.Mutex
+	cancel  context.CancelFunc
+	done    chan struct{}
 }
 
 // NewManager returns a new manager with the given DB and inactivity timeout.
@@ -57,7 +61,6 @@ func NewManager(db *sql.DB, timeout time.Duration) (*manager, error) {
 	m := &manager{
 		db:      db,
 		timeout: timeout,
-		done:    make(chan struct{}),
 	}
 	return m, nil
 }
@@ -65,20 +68,30 @@ func NewManager(db *sql.DB, timeout time.Duration) (*manager, error) {
 // Start launches the background cleanup goroutine. It is safe to call Start
 // more than once; subsequent calls are no-ops if already running.
 func (m *manager) Start(ctx context.Context) {
+	m.startMu.Lock()
 	if m.cancel != nil {
+		m.startMu.Unlock()
 		return
 	}
+	m.done = make(chan struct{})
 	bgCtx, cancel := context.WithCancel(ctx)
 	m.cancel = cancel
+	m.startMu.Unlock()
+
 	go m.runCleanup(bgCtx)
 }
 
 // Stop cancels the background goroutine and waits for it to exit.
 func (m *manager) Stop() {
-	if m.cancel != nil {
-		m.cancel()
-		<-m.done
-		m.cancel = nil
+	m.startMu.Lock()
+	cancel := m.cancel
+	done := m.done
+	m.cancel = nil
+	m.startMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+		<-done
 	}
 }
 
@@ -125,10 +138,12 @@ func (m *manager) GetOrCreate(ctx context.Context, channelID, userID string) (*S
 		if now.Sub(existing.LastActive) < m.timeout {
 			// Session is still active — update the in-memory timestamp and the DB.
 			existing.LastActive = now
-			_, _ = m.db.ExecContext(ctx,
+			if _, err := m.db.ExecContext(ctx,
 				`UPDATE sessions SET last_active = ? WHERE id = ?`,
 				now.UnixMilli(), existing.ID,
-			)
+			); err != nil {
+				slog.Warn("session: failed to update last_active", "session_id", existing.ID, "error", err)
+			}
 			return existing, nil
 		}
 		// Session has expired — fall through to create a new one.
@@ -180,7 +195,9 @@ func (m *manager) Touch(ctx context.Context, sessionID string) error {
 		return fmt.Errorf("session: touch db: %w", err)
 	}
 
-	// Update the cache entry if present.
+	// Update the cache entry if present. Hold mu to protect the shared *Session
+	// pointer's LastActive field against concurrent mutation.
+	m.mu.Lock()
 	m.cache.Range(func(k, v any) bool {
 		s := v.(*Session)
 		if s.ID == sessionID {
@@ -189,13 +206,21 @@ func (m *manager) Touch(ctx context.Context, sessionID string) error {
 		}
 		return true
 	})
+	m.mu.Unlock()
 
 	return nil
 }
 
-// Close removes the session from the cache and deletes it from the database.
+// Close removes the session from the database first, then evicts it from the
+// cache only on success.
 func (m *manager) Close(ctx context.Context, sessionID string) error {
-	// Remove from cache.
+	// Delete from DB first.
+	_, err := m.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, sessionID)
+	if err != nil {
+		return fmt.Errorf("session: close db: %w", err)
+	}
+
+	// Only evict from cache after a successful DB delete.
 	m.cache.Range(func(k, v any) bool {
 		s := v.(*Session)
 		if s.ID == sessionID {
@@ -205,10 +230,6 @@ func (m *manager) Close(ctx context.Context, sessionID string) error {
 		return true
 	})
 
-	_, err := m.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, sessionID)
-	if err != nil {
-		return fmt.Errorf("session: close db: %w", err)
-	}
 	return nil
 }
 
@@ -227,5 +248,16 @@ func (m *manager) CleanupExpired(ctx context.Context) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("session: rows affected: %w", err)
 	}
+
+	// Evict stale entries from the in-memory cache to keep it consistent with
+	// the database after the bulk DELETE.
+	m.cache.Range(func(k, v any) bool {
+		s := v.(*Session)
+		if s.LastActive.UnixMilli() < cutoff {
+			m.cache.Delete(k)
+		}
+		return true
+	})
+
 	return n, nil
 }

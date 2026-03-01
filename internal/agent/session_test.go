@@ -200,8 +200,12 @@ func TestSessionManager_CleanupExpired(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Create 3 sessions.
-	for i := 0; i < 3; i++ {
+	// Create 3 sessions and record the ID of the first one for later cache check.
+	firstSess, err := mgr.GetOrCreate(ctx, "channel-0", "user-0")
+	require.NoError(t, err, "creating session 0")
+	firstID := firstSess.ID
+
+	for i := 1; i < 3; i++ {
 		_, err := mgr.GetOrCreate(ctx, fmt.Sprintf("channel-%d", i), fmt.Sprintf("user-%d", i))
 		require.NoError(t, err, "creating session %d", i)
 	}
@@ -219,4 +223,12 @@ func TestSessionManager_CleanupExpired(t *testing.T) {
 	err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions`).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count, "all expired sessions should be deleted from DB")
+
+	// Verify the cache was also evicted: GetOrCreate for the first channel/user
+	// pair must return a brand-new session ID, not the stale cached one.
+	sess2, err := mgr.GetOrCreate(ctx, "channel-0", "user-0")
+	require.NoError(t, err)
+	require.NotNil(t, sess2)
+	assert.NotEqual(t, firstID, sess2.ID,
+		"cache should have been evicted by CleanupExpired; expected a new session ID")
 }
