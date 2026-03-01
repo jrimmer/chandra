@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -19,22 +20,29 @@ type HandlerFunc func(ctx context.Context, params json.RawMessage) (any, error)
 type Server struct {
 	handlers map[string]HandlerFunc
 	listener net.Listener
-	mu       sync.Mutex
+	mu       sync.RWMutex
 	wg       sync.WaitGroup
 	quit     chan struct{}
+	ctx      context.Context
+	cancel   context.CancelFunc
 }
 
 // NewServer creates a new Server with no handlers registered.
 func NewServer() *Server {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Server{
 		handlers: make(map[string]HandlerFunc),
 		quit:     make(chan struct{}),
+		ctx:      ctx,
+		cancel:   cancel,
 	}
 }
 
 // Handle registers a HandlerFunc for the given method name.
-// Calling Handle after Start has undefined behavior.
+// It is safe to call Handle concurrently with other operations.
 func (s *Server) Handle(method string, h HandlerFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.handlers[method] = h
 }
 
@@ -87,15 +95,18 @@ func (s *Server) Start(socketPath string) error {
 	return nil
 }
 
-// Stop closes the listener and waits for all in-flight connections to finish.
+// Stop cancels the server context, closes the listener, and waits for all
+// in-flight connections to finish.
 func (s *Server) Stop() {
+	s.cancel()
 	close(s.quit)
 
-	s.mu.Lock()
-	if s.listener != nil {
-		s.listener.Close()
+	s.mu.RLock()
+	ln := s.listener
+	s.mu.RUnlock()
+	if ln != nil {
+		ln.Close()
 	}
-	s.mu.Unlock()
 
 	s.wg.Wait()
 }
@@ -111,7 +122,7 @@ func (s *Server) acceptLoop(ln net.Listener) {
 			case <-s.quit:
 				return
 			default:
-				// Unexpected error; stop accepting.
+				slog.Error("api: accept loop error", "err", err)
 				return
 			}
 		}
@@ -131,27 +142,40 @@ func (s *Server) handleConn(conn net.Conn) {
 	var req Request
 	if err := dec.Decode(&req); err != nil {
 		// Malformed request — send error response.
-		_ = enc.Encode(Response{Error: fmt.Sprintf("api: decode request: %v", err)})
+		if encErr := enc.Encode(Response{Error: fmt.Sprintf("api: decode request: %v", err)}); encErr != nil {
+			slog.Warn("api: encode error response", "err", encErr)
+		}
 		return
 	}
 
+	s.mu.RLock()
 	handler, ok := s.handlers[req.Method]
+	s.mu.RUnlock()
+
 	if !ok {
-		_ = enc.Encode(Response{Error: fmt.Sprintf("api: unknown method: %s", req.Method)})
+		if encErr := enc.Encode(Response{Error: fmt.Sprintf("api: unknown method: %s", req.Method)}); encErr != nil {
+			slog.Warn("api: encode error response", "err", encErr)
+		}
 		return
 	}
 
-	result, err := handler(context.Background(), req.Params)
+	result, err := handler(s.ctx, req.Params)
 	if err != nil {
-		_ = enc.Encode(Response{Error: err.Error()})
+		if encErr := enc.Encode(Response{Error: err.Error()}); encErr != nil {
+			slog.Warn("api: encode error response", "err", encErr)
+		}
 		return
 	}
 
 	raw, err := json.Marshal(result)
 	if err != nil {
-		_ = enc.Encode(Response{Error: fmt.Sprintf("api: marshal result: %v", err)})
+		if encErr := enc.Encode(Response{Error: fmt.Sprintf("api: marshal result: %v", err)}); encErr != nil {
+			slog.Warn("api: encode error response", "err", encErr)
+		}
 		return
 	}
 
-	_ = enc.Encode(Response{Result: json.RawMessage(raw)})
+	if encErr := enc.Encode(Response{Result: json.RawMessage(raw)}); encErr != nil {
+		slog.Warn("api: encode result response", "err", encErr)
+	}
 }

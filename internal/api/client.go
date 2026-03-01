@@ -7,6 +7,15 @@ import (
 	"net"
 )
 
+// ServerError represents an application-level error returned by the daemon in
+// the response Error field. Callers can use errors.As to distinguish a daemon
+// error from a network or protocol error.
+type ServerError struct {
+	Message string
+}
+
+func (e *ServerError) Error() string { return e.Message }
+
 // Client connects to a chandrad daemon over a Unix socket and issues RPC calls.
 type Client struct {
 	socketPath string
@@ -58,7 +67,7 @@ func (c *Client) Call(ctx context.Context, method string, params any, result any
 	}
 
 	if resp.Error != "" {
-		return fmt.Errorf("%s", resp.Error)
+		return &ServerError{Message: resp.Error}
 	}
 
 	if result != nil && resp.Result != nil {
