@@ -18,6 +18,8 @@ import (
 	"github.com/jrimmer/chandra/internal/agent"
 	"github.com/jrimmer/chandra/internal/api"
 	"github.com/jrimmer/chandra/internal/budget"
+	"github.com/jrimmer/chandra/internal/channels"
+	"github.com/jrimmer/chandra/internal/channels/discord"
 	"github.com/jrimmer/chandra/internal/config"
 	"github.com/jrimmer/chandra/internal/events"
 	mqttbridge "github.com/jrimmer/chandra/internal/events/mqtt"
@@ -232,14 +234,7 @@ func run(ctx context.Context, safeMode bool) error {
 	}
 
 	// -------------------------------------------------------------------
-	// Step 9: Start event-to-intent handler.
-	// -------------------------------------------------------------------
-	intentHandler := events.NewEventIntentHandler(inStore, bus, cfg.MQTT.Topics)
-	intentHandler.Start()
-	slog.Info("chandrad: event-intent handler started")
-
-	// -------------------------------------------------------------------
-	// Step 10: Start scheduler.
+	// Step 9: Start scheduler.
 	// -------------------------------------------------------------------
 	tickInterval := 60 * time.Second
 	if cfg.Scheduler.TickInterval != "" {
@@ -255,10 +250,68 @@ func run(ctx context.Context, safeMode bool) error {
 	}
 
 	// -------------------------------------------------------------------
-	// Step 11: Initialize Discord channel (if configured).
+	// Step 10: Start event-to-intent handler.
 	// -------------------------------------------------------------------
-	if !safeMode && cfg.Channels.Discord != nil && cfg.Channels.Discord.Token != "" {
-		slog.Info("chandrad: Discord configured — deferred initialization (no live token validation at startup)")
+	intentHandler := events.NewEventIntentHandler(inStore, bus, cfg.MQTT.Topics)
+	intentHandler.Start()
+	slog.Info("chandrad: event-intent handler started")
+
+	// -------------------------------------------------------------------
+	// Step 11: Start Discord channel listener (if configured).
+	//
+	// agentLoop and sessionMgr are declared as interfaces here so that the
+	// Discord goroutine can close over them. Both are assigned in Steps 12-13
+	// before the daemon enters the blocking select (Step 14), so the goroutine
+	// sees the final values when it first processes a message.
+	// -------------------------------------------------------------------
+	var agentLoop agent.AgentLoop
+	var sessionMgr agent.Manager
+
+	var discordChannel channels.Channel
+	discordConfigured := !safeMode && cfg.Channels.Discord != nil && cfg.Channels.Discord.Token != ""
+	if discordConfigured {
+		slog.Info("chandrad: starting Discord channel listener")
+		dc, dcErr := discord.NewDiscord(cfg.Channels.Discord.Token, cfg.Channels.Discord.ChannelIDs)
+		if dcErr != nil {
+			return fmt.Errorf("chandrad: discord init: %w", dcErr)
+		}
+		discordCh, listenErr := dc.Listen(ctx)
+		if listenErr != nil {
+			return fmt.Errorf("chandrad: discord listen: %w", listenErr)
+		}
+		discordChannel = dc
+
+		// Process inbound messages in a goroutine via agent loop.
+		// The goroutine exits when discordCh is closed (on ctx cancellation).
+		// agentLoop and sessionMgr are nil until Steps 12-13 complete, but
+		// the goroutine only processes messages after startup finishes.
+		go func() {
+			for msg := range discordCh {
+				if sessionMgr == nil {
+					slog.Warn("chandrad: discord: session manager not ready, dropping message")
+					continue
+				}
+				sess, sessErr := sessionMgr.GetOrCreate(ctx, msg.ChannelID, msg.UserID)
+				if sessErr != nil {
+					slog.Error("chandrad: discord: session error", "err", sessErr)
+					continue
+				}
+				if agentLoop == nil {
+					slog.Warn("chandrad: discord: agent loop not available, dropping message")
+					continue
+				}
+				resp, runErr := agentLoop.Run(ctx, sess, msg)
+				if runErr != nil {
+					slog.Error("chandrad: agent loop error", "err", runErr)
+					continue
+				}
+				_ = dc.Send(ctx, channels.OutboundMessage{
+					ChannelID: msg.ChannelID,
+					Content:   resp,
+					ReplyToID: msg.ID,
+				})
+			}
+		}()
 	} else {
 		slog.Info("chandrad: Discord not configured, skipping")
 	}
@@ -267,17 +320,18 @@ func run(ctx context.Context, safeMode bool) error {
 	// Step 12: Start session manager.
 	// -------------------------------------------------------------------
 	sessionTimeout := 30 * time.Minute
-	sessionMgr, err := agent.NewManager(db, sessionTimeout)
-	if err != nil {
-		return fmt.Errorf("chandrad: init session manager: %w", err)
+	mgr, smErr := agent.NewManager(db, sessionTimeout)
+	if smErr != nil {
+		return fmt.Errorf("chandrad: init session manager: %w", smErr)
 	}
-	sessionMgr.Start(ctx)
+	mgr.Start(ctx)
+	// Assign to the interface variable so the Discord goroutine can use it.
+	sessionMgr = mgr
 	slog.Info("chandrad: session manager started")
 
 	// -------------------------------------------------------------------
 	// Step 13: Initialize agent loop (if provider available).
 	// -------------------------------------------------------------------
-	var agentLoop agent.AgentLoop
 	if chatProvider != nil {
 		loopCfg := agent.LoopConfig{
 			Provider:  chatProvider,
@@ -303,7 +357,7 @@ func run(ctx context.Context, safeMode bool) error {
 	defer daemonCancel()
 	cancelDaemon = daemonCancel
 
-	registerHandlers(apiServer, cancelDaemon, startTime, mem, inStore, registry, alog, confirmGate, db, agentLoop)
+	registerHandlers(apiServer, cancelDaemon, startTime, mem, inStore, registry, alog, confirmGate, db, agentLoop, sessionMgr, discordChannel, discordConfigured)
 
 	socketPath := resolveSocketPath()
 	if err := apiServer.Start(socketPath); err != nil {
@@ -325,19 +379,34 @@ func run(ctx context.Context, safeMode bool) error {
 	}
 
 	// -------------------------------------------------------------------
-	// Step 15: Graceful shutdown (reverse order).
+	// Step 15: Graceful shutdown (reverse of startup order).
+	// Startup: DB(3), Memory(4), Tools(5), Provider(6), Event bus(7),
+	//          MQTT(8), Scheduler(9), Event-intent handler(10), Discord(11),
+	//          Session manager(12), Agent loop(13), API server(13b).
+	// Shutdown reverse: API server, Session manager, Discord (ctx cancel closes it),
+	//                   Event-intent handler, Scheduler, MQTT bridge, Event bus.
+	// DB is closed via defer st.Close().
 	// -------------------------------------------------------------------
 	apiServer.Stop()
 	slog.Info("chandrad: API server stopped")
+
+	mgr.Stop()
+	slog.Info("chandrad: session manager stopped")
+
+	// Discord channel listener goroutine exits naturally when ctx is cancelled
+	// (discord.Listen closes the output channel on ctx.Done). No explicit Stop needed.
+	if discordChannel != nil {
+		slog.Info("chandrad: Discord channel listener stopped (context cancelled)")
+	}
+
+	intentHandler.Stop()
+	slog.Info("chandrad: intent handler stopped")
 
 	if err := sched.Stop(); err != nil {
 		slog.Warn("chandrad: scheduler stop error", "err", err)
 	} else {
 		slog.Info("chandrad: scheduler stopped")
 	}
-
-	intentHandler.Stop()
-	slog.Info("chandrad: intent handler stopped")
 
 	if mqttBridge != nil {
 		if err := mqttBridge.Stop(); err != nil {
@@ -349,9 +418,6 @@ func run(ctx context.Context, safeMode bool) error {
 
 	bus.Stop()
 	slog.Info("chandrad: event bus stopped")
-
-	sessionMgr.Stop()
-	slog.Info("chandrad: session manager stopped")
 
 	slog.Info("chandrad: shutdown complete")
 	return nil
@@ -429,26 +495,83 @@ func registerHandlers(
 	confirmGate *confirm.Store,
 	db *sql.DB,
 	agentLoop agent.AgentLoop,
+	sessionMgr agent.Manager,
+	discordChannel channels.Channel,
+	discordConfigured bool,
 ) {
-	_ = db        // reserved for future handlers that need direct DB access
 	_ = agentLoop // reserved for future use
 
 	// daemon.health
 	srv.Handle("daemon.health", func(ctx context.Context, _ json.RawMessage) (any, error) {
 		uptime := time.Since(startTime).Seconds()
+
+		// --- Database ping ---
+		dbStatus := "ok"
+		dbLatencyMs := 0.0
+		dbStart := time.Now()
+		if pingErr := db.PingContext(ctx); pingErr != nil {
+			dbStatus = "error"
+			slog.Warn("chandrad: health: database ping failed", "err", pingErr)
+		} else {
+			dbLatencyMs = float64(time.Since(dbStart).Milliseconds())
+		}
+
+		// --- Discord status ---
+		var discordInfo map[string]any
+		if discordChannel != nil {
+			discordInfo = map[string]any{"status": "ok", "connected": true}
+		} else if discordConfigured {
+			discordInfo = map[string]any{"status": "not_configured", "connected": false}
+		} else {
+			discordInfo = map[string]any{"status": "disabled", "connected": false}
+		}
+
+		// --- Scheduler pending intents ---
+		pendingIntents := 0
+		if activeIntents, intentErr := inStore.Active(ctx); intentErr == nil {
+			pendingIntents = len(activeIntents)
+		}
+
+		// --- Active sessions count ---
+		activeSessions := 0
+		if sessionMgr != nil {
+			var count int
+			if rowErr := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions`).Scan(&count); rowErr == nil {
+				activeSessions = count
+			}
+		}
+
+		// --- Memory entries count ---
+		memoryEntries := 0
+		db.QueryRowContext(ctx, `SELECT COUNT(*) FROM memory_entries`).Scan(&memoryEntries) //nolint:errcheck
+
+		// --- Action log today count ---
+		now := time.Now()
+		midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		actionLogToday := 0
+		db.QueryRowContext(ctx, `SELECT COUNT(*) FROM action_log WHERE timestamp >= ?`, midnight.UnixMilli()).Scan(&actionLogToday) //nolint:errcheck
+
+		// --- Overall status ---
+		overallStatus := "healthy"
+		if dbStatus != "ok" {
+			overallStatus = "unhealthy"
+		} else if discordConfigured && discordChannel == nil {
+			overallStatus = "degraded"
+		}
+
 		return map[string]any{
-			"status":         "healthy",
+			"status":         overallStatus,
 			"uptime_seconds": uptime,
 			"components": map[string]any{
-				"database":  map[string]any{"status": "ok", "latency_ms": 0},
-				"discord":   map[string]any{"status": "ok", "connected": false},
+				"database":  map[string]any{"status": dbStatus, "latency_ms": dbLatencyMs},
+				"discord":   discordInfo,
 				"mqtt":      map[string]any{"status": "ok", "connected": false},
-				"scheduler": map[string]any{"status": "ok", "pending_intents": 0},
-				"provider":  map[string]any{"status": "ok", "last_call_ms": 0},
+				"scheduler": map[string]any{"status": "ok", "pending_intents": pendingIntents},
+				"provider":  map[string]any{"status": "ok"},
 			},
-			"active_sessions":  0,
-			"memory_entries":   0,
-			"action_log_today": 0,
+			"active_sessions":  activeSessions,
+			"memory_entries":   memoryEntries,
+			"action_log_today": actionLogToday,
 		}, nil
 	})
 
