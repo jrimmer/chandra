@@ -1,0 +1,231 @@
+package agent
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/jrimmer/chandra/store"
+)
+
+// Session represents a single activity window for a user in a channel.
+type Session struct {
+	ID             string    // ULID — new per activity window
+	ConversationID string    // stable: SHA256 of channel_id + ":" + user_id, hex-encoded, first 16 chars
+	ChannelID      string
+	UserID         string
+	LastActive     time.Time
+	CreatedAt      time.Time
+}
+
+// Manager manages sessions for the agent.
+type Manager interface {
+	GetOrCreate(ctx context.Context, channelID, userID string) (*Session, error)
+	Touch(ctx context.Context, sessionID string) error
+	Close(ctx context.Context, sessionID string) error
+	CleanupExpired(ctx context.Context) (int64, error)
+}
+
+// Compile-time assertion that *manager satisfies Manager.
+var _ Manager = (*manager)(nil)
+
+// manager is the concrete implementation of Manager.
+type manager struct {
+	db      *sql.DB
+	timeout time.Duration
+
+	// mu serializes GetOrCreate so that two concurrent callers for the same
+	// channel/user pair do not both attempt to INSERT a new session row.
+	mu    sync.Mutex
+	cache sync.Map // key: "channelID:userID" → *Session
+
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+// NewManager returns a new manager with the given DB and inactivity timeout.
+// A background goroutine that calls CleanupExpired every 5 minutes is started
+// via Start; callers should call Stop to shut it down.
+func NewManager(db *sql.DB, timeout time.Duration) (*manager, error) {
+	if db == nil {
+		return nil, fmt.Errorf("session: db must not be nil")
+	}
+	m := &manager{
+		db:      db,
+		timeout: timeout,
+		done:    make(chan struct{}),
+	}
+	return m, nil
+}
+
+// Start launches the background cleanup goroutine. It is safe to call Start
+// more than once; subsequent calls are no-ops if already running.
+func (m *manager) Start(ctx context.Context) {
+	if m.cancel != nil {
+		return
+	}
+	bgCtx, cancel := context.WithCancel(ctx)
+	m.cancel = cancel
+	go m.runCleanup(bgCtx)
+}
+
+// Stop cancels the background goroutine and waits for it to exit.
+func (m *manager) Stop() {
+	if m.cancel != nil {
+		m.cancel()
+		<-m.done
+		m.cancel = nil
+	}
+}
+
+func (m *manager) runCleanup(ctx context.Context) {
+	defer close(m.done)
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			_, _ = m.CleanupExpired(ctx)
+		}
+	}
+}
+
+// cacheKey returns the sync.Map key for the given channel/user pair.
+func cacheKey(channelID, userID string) string {
+	return channelID + ":" + userID
+}
+
+// ComputeConversationID returns the stable conversation ID for a channel/user
+// pair: SHA256(channelID + ":" + userID), hex-encoded, first 16 chars.
+// Exported so tests can verify the expected value independently.
+func ComputeConversationID(channelID, userID string) string {
+	sum := sha256.Sum256([]byte(channelID + ":" + userID))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+// GetOrCreate returns the active session for the given channel/user pair,
+// creating a new one if no session exists or the existing one has expired.
+// A mutex ensures only one goroutine per manager can be in the check-and-insert
+// critical section at a time, preventing duplicate INSERT errors.
+func (m *manager) GetOrCreate(ctx context.Context, channelID, userID string) (*Session, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := cacheKey(channelID, userID)
+	now := time.Now().UTC()
+
+	if raw, ok := m.cache.Load(key); ok {
+		existing := raw.(*Session)
+		if now.Sub(existing.LastActive) < m.timeout {
+			// Session is still active — update the in-memory timestamp and the DB.
+			existing.LastActive = now
+			_, _ = m.db.ExecContext(ctx,
+				`UPDATE sessions SET last_active = ? WHERE id = ?`,
+				now.UnixMilli(), existing.ID,
+			)
+			return existing, nil
+		}
+		// Session has expired — fall through to create a new one.
+	}
+
+	convID := ComputeConversationID(channelID, userID)
+	sess := &Session{
+		ID:             store.NewID(),
+		ConversationID: convID,
+		ChannelID:      channelID,
+		UserID:         userID,
+		LastActive:     now,
+		CreatedAt:      now,
+	}
+
+	if err := m.insertDB(ctx, sess); err != nil {
+		return nil, fmt.Errorf("session: insert: %w", err)
+	}
+
+	m.cache.Store(key, sess)
+	return sess, nil
+}
+
+// insertDB persists a new session to the database.
+func (m *manager) insertDB(ctx context.Context, sess *Session) error {
+	_, err := m.db.ExecContext(ctx,
+		`INSERT INTO sessions (id, conversation_id, channel_id, user_id, started_at, last_active)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		sess.ID,
+		sess.ConversationID,
+		sess.ChannelID,
+		sess.UserID,
+		sess.CreatedAt.UnixMilli(),
+		sess.LastActive.UnixMilli(),
+	)
+	return err
+}
+
+// Touch updates the last_active timestamp for the given session in both the
+// database and the in-memory cache.
+func (m *manager) Touch(ctx context.Context, sessionID string) error {
+	now := time.Now().UTC()
+	_, err := m.db.ExecContext(ctx,
+		`UPDATE sessions SET last_active = ? WHERE id = ?`,
+		now.UnixMilli(),
+		sessionID,
+	)
+	if err != nil {
+		return fmt.Errorf("session: touch db: %w", err)
+	}
+
+	// Update the cache entry if present.
+	m.cache.Range(func(k, v any) bool {
+		s := v.(*Session)
+		if s.ID == sessionID {
+			s.LastActive = now
+			return false // stop iteration
+		}
+		return true
+	})
+
+	return nil
+}
+
+// Close removes the session from the cache and deletes it from the database.
+func (m *manager) Close(ctx context.Context, sessionID string) error {
+	// Remove from cache.
+	m.cache.Range(func(k, v any) bool {
+		s := v.(*Session)
+		if s.ID == sessionID {
+			m.cache.Delete(k)
+			return false
+		}
+		return true
+	})
+
+	_, err := m.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, sessionID)
+	if err != nil {
+		return fmt.Errorf("session: close db: %w", err)
+	}
+	return nil
+}
+
+// CleanupExpired deletes sessions whose last_active timestamp is older than
+// the manager's inactivity timeout. Returns the number of rows deleted.
+func (m *manager) CleanupExpired(ctx context.Context) (int64, error) {
+	cutoff := time.Now().UTC().Add(-m.timeout).UnixMilli()
+	result, err := m.db.ExecContext(ctx,
+		`DELETE FROM sessions WHERE last_active < ?`,
+		cutoff,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("session: cleanup expired: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("session: rows affected: %w", err)
+	}
+	return n, nil
+}
