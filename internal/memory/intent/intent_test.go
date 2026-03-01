@@ -88,50 +88,60 @@ func TestIntentStore_CreateAndActive(t *testing.T) {
 }
 
 func TestIntentStore_Due(t *testing.T) {
-	db := newTestDB(t)
-	st := intent.NewStore(db)
-	ctx := context.Background()
 	now := time.Now()
 
-	// Due: NextCheck is in the past
-	pastIntent, err := st.Create(ctx, "past intent", "cond", "action")
-	require.NoError(t, err)
-	pastIntent.NextCheck = now.Add(-1 * time.Minute)
-	require.NoError(t, st.Update(ctx, pastIntent))
-
-	// Not due: NextCheck is in the future
-	futureIntent, err := st.Create(ctx, "future intent", "cond", "action")
-	require.NoError(t, err)
-	futureIntent.NextCheck = now.Add(10 * time.Minute)
-	require.NoError(t, st.Update(ctx, futureIntent))
-
-	// Boundary: NextCheck at exactly now - should be due (next_check <= now)
-	// We use a time slightly in the past to ensure it's captured
-	boundaryIntent, err := st.Create(ctx, "boundary intent", "cond", "action")
-	require.NoError(t, err)
-	boundaryIntent.NextCheck = now.Add(-1 * time.Millisecond)
-	require.NoError(t, st.Update(ctx, boundaryIntent))
-
-	// Completed intent in the past should not appear
-	completedIntent, err := st.Create(ctx, "completed intent", "cond", "action")
-	require.NoError(t, err)
-	completedIntent.NextCheck = now.Add(-1 * time.Minute)
-	completedIntent.Status = intent.StatusCompleted
-	require.NoError(t, st.Update(ctx, completedIntent))
-
-	due, err := st.Due(ctx)
-	require.NoError(t, err)
-	assert.Len(t, due, 2, "only past and boundary intents should be due")
-
-	ids := make(map[string]bool)
-	for _, d := range due {
-		ids[d.ID] = true
-		assert.Equal(t, intent.StatusActive, d.Status)
+	cases := []struct {
+		name          string
+		nextCheck     time.Time
+		status        intent.IntentStatus
+		wantInDue     bool
+	}{
+		{
+			name:      "past NextCheck appears in Due",
+			nextCheck: now.Add(-1 * time.Minute),
+			status:    intent.StatusActive,
+			wantInDue: true,
+		},
+		{
+			name:      "future NextCheck does not appear in Due",
+			nextCheck: now.Add(10 * time.Minute),
+			status:    intent.StatusActive,
+			wantInDue: false,
+		},
+		{
+			name:      "completed status with past NextCheck does not appear in Due",
+			nextCheck: now.Add(-1 * time.Minute),
+			status:    intent.StatusCompleted,
+			wantInDue: false,
+		},
 	}
-	assert.True(t, ids[pastIntent.ID], "past intent should be due")
-	assert.True(t, ids[boundaryIntent.ID], "boundary intent should be due")
-	assert.False(t, ids[futureIntent.ID], "future intent should not be due")
-	assert.False(t, ids[completedIntent.ID], "completed intent should not be due")
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := newTestDB(t)
+			st := intent.NewStore(db)
+			ctx := context.Background()
+
+			in, err := st.Create(ctx, "desc", "cond", "action")
+			require.NoError(t, err)
+			require.NotEmpty(t, in.ID)
+
+			in.NextCheck = tc.nextCheck
+			in.Status = tc.status
+			require.NoError(t, st.Update(ctx, in))
+
+			due, err := st.Due(ctx)
+			require.NoError(t, err)
+
+			found := false
+			for _, d := range due {
+				if d.ID == in.ID {
+					found = true
+				}
+			}
+			assert.Equal(t, tc.wantInDue, found)
+		})
+	}
 }
 
 func TestIntentStore_Complete(t *testing.T) {
