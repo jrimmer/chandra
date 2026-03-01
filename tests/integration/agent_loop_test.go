@@ -223,7 +223,8 @@ func TestIntegration_FullAgentLoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("agent.NewManager: %v", err)
 	}
-	session, err := sessionMgr.GetOrCreate(ctx, "integ-chan-001", "user-integration")
+	convID := agent.ComputeConversationID("integ-chan-001", "user-integration")
+	session, err := sessionMgr.GetOrCreate(ctx, convID, "integ-chan-001", "user-integration")
 	if err != nil {
 		t.Fatalf("sessionMgr.GetOrCreate: %v", err)
 	}

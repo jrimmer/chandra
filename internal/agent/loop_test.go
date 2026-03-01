@@ -177,36 +177,27 @@ var _ tools.Executor = (*mockExecutor)(nil)
 
 // mockActionLog records Record calls.
 type mockActionLog struct {
-	recorded []struct {
-		sessionID  string
-		actionType actionlog.ActionType
-		details    string
-	}
+	recorded []actionlog.ActionEntry
 }
 
-func (m *mockActionLog) Record(_ context.Context, sessionID string, actionType actionlog.ActionType, details string) error {
-	m.recorded = append(m.recorded, struct {
-		sessionID  string
-		actionType actionlog.ActionType
-		details    string
-	}{sessionID, actionType, details})
+func (m *mockActionLog) Record(_ context.Context, entry actionlog.ActionEntry) error {
+	m.recorded = append(m.recorded, entry)
 	return nil
 }
-func (m *mockActionLog) Query(_ context.Context, _, _ time.Time, _ actionlog.ActionType) ([]*actionlog.Action, error) {
+func (m *mockActionLog) Query(_ context.Context, _, _ time.Time, _ []actionlog.ActionType) ([]actionlog.ActionEntry, error) {
 	return nil, nil
 }
-func (m *mockActionLog) Recent(_ context.Context, _ int) ([]*actionlog.Action, error) { return nil, nil }
-func (m *mockActionLog) GetByID(_ context.Context, _ string) (*actionlog.Action, error) {
+func (m *mockActionLog) Recent(_ context.Context, _ int) ([]actionlog.ActionEntry, error) {
 	return nil, nil
 }
-func (m *mockActionLog) GenerateHourlyRollup(_ context.Context, _ time.Time) (*actionlog.Rollup, error) {
-	return nil, nil
+func (m *mockActionLog) GetRollup(_ context.Context, _ string, _ time.Time) (actionlog.ActionRollup, error) {
+	return actionlog.ActionRollup{}, nil
 }
-func (m *mockActionLog) GetRollup(_ context.Context, _ string, _ time.Time) (*actionlog.Rollup, error) {
-	return nil, nil
+func (m *mockActionLog) GenerateRollups(_ context.Context) error {
+	return nil
 }
 
-var _ actionlog.Log = (*mockActionLog)(nil)
+var _ actionlog.ActionLog = (*mockActionLog)(nil)
 
 // mockChannel is a no-op channel.
 type mockChannel struct{}
@@ -226,8 +217,8 @@ func newTestSession() *agent.Session {
 		ConversationID: "conv-001",
 		ChannelID:      "chan-001",
 		UserID:         "user-001",
+		StartedAt:      time.Now(),
 		LastActive:     time.Now(),
-		CreatedAt:      time.Now(),
 	}
 }
 
@@ -512,7 +503,7 @@ func TestAgentLoop_ActionLog_ToolCall(t *testing.T) {
 	// Check that ActionTypeToolCall was recorded.
 	found := false
 	for _, r := range al.recorded {
-		if r.actionType == actionlog.ActionToolCall {
+		if r.Type == actionlog.ActionToolCall {
 			found = true
 			break
 		}
@@ -540,7 +531,7 @@ func TestAgentLoop_ActionLog_OutboundMessage(t *testing.T) {
 
 	found := false
 	for _, r := range al.recorded {
-		if r.actionType == actionlog.ActionMessageSent {
+		if r.Type == actionlog.ActionMessageSent {
 			found = true
 			break
 		}
@@ -568,7 +559,7 @@ func TestAgentLoop_ActionLog_Error(t *testing.T) {
 
 	found := false
 	for _, r := range al.recorded {
-		if r.actionType == actionlog.ActionError {
+		if r.Type == actionlog.ActionError {
 			found = true
 			break
 		}

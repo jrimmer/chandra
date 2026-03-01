@@ -34,7 +34,8 @@ func TestSessionManager_GetOrCreate_NewSession(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	sess, err := mgr.GetOrCreate(ctx, "channel-1", "user-1")
+	convID := agent.ComputeConversationID("channel-1", "user-1")
+	sess, err := mgr.GetOrCreate(ctx, convID, "channel-1", "user-1")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -55,14 +56,15 @@ func TestSessionManager_GetOrCreate_ResumeActive(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := context.Background()
+	convID := agent.ComputeConversationID("channel-1", "user-1")
 
 	// First call creates a new session.
-	sess1, err := mgr.GetOrCreate(ctx, "channel-1", "user-1")
+	sess1, err := mgr.GetOrCreate(ctx, convID, "channel-1", "user-1")
 	require.NoError(t, err)
 	require.NotNil(t, sess1)
 
 	// Second call without advancing time returns the same session.
-	sess2, err := mgr.GetOrCreate(ctx, "channel-1", "user-1")
+	sess2, err := mgr.GetOrCreate(ctx, convID, "channel-1", "user-1")
 	require.NoError(t, err)
 	require.NotNil(t, sess2)
 
@@ -77,15 +79,16 @@ func TestSessionManager_GetOrCreate_ExpiredCreatesNew(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := context.Background()
+	convID := agent.ComputeConversationID("channel-exp", "user-exp")
 
-	sess1, err := mgr.GetOrCreate(ctx, "channel-exp", "user-exp")
+	sess1, err := mgr.GetOrCreate(ctx, convID, "channel-exp", "user-exp")
 	require.NoError(t, err)
 	require.NotNil(t, sess1)
 
 	// Wait for the session to expire.
 	time.Sleep(5 * time.Millisecond)
 
-	sess2, err := mgr.GetOrCreate(ctx, "channel-exp", "user-exp")
+	sess2, err := mgr.GetOrCreate(ctx, convID, "channel-exp", "user-exp")
 	require.NoError(t, err)
 	require.NotNil(t, sess2)
 
@@ -99,8 +102,9 @@ func TestSessionManager_Touch(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := context.Background()
+	convID := agent.ComputeConversationID("channel-touch", "user-touch")
 
-	sess, err := mgr.GetOrCreate(ctx, "channel-touch", "user-touch")
+	sess, err := mgr.GetOrCreate(ctx, convID, "channel-touch", "user-touch")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -109,7 +113,7 @@ func TestSessionManager_Touch(t *testing.T) {
 	// Small sleep to ensure time advances.
 	time.Sleep(10 * time.Millisecond)
 
-	err = mgr.Touch(ctx, sess.ID)
+	err = mgr.Touch(sess.ID)
 	require.NoError(t, err)
 
 	// Verify DB was updated.
@@ -129,14 +133,15 @@ func TestSessionManager_Close(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := context.Background()
+	convID := agent.ComputeConversationID("channel-close", "user-close")
 
-	sess, err := mgr.GetOrCreate(ctx, "channel-close", "user-close")
+	sess, err := mgr.GetOrCreate(ctx, convID, "channel-close", "user-close")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	firstID := sess.ID
 
 	// Close the session.
-	err = mgr.Close(ctx, sess.ID)
+	err = mgr.Close(sess.ID)
 	require.NoError(t, err)
 
 	// Verify it's gone from DB.
@@ -146,13 +151,78 @@ func TestSessionManager_Close(t *testing.T) {
 	assert.Equal(t, 0, count, "closed session should be deleted from DB")
 
 	// GetOrCreate should create a brand new session.
-	sess2, err := mgr.GetOrCreate(ctx, "channel-close", "user-close")
+	sess2, err := mgr.GetOrCreate(ctx, convID, "channel-close", "user-close")
 	require.NoError(t, err)
 	require.NotNil(t, sess2)
 	assert.NotEqual(t, firstID, sess2.ID, "after Close, GetOrCreate should produce a new session ID")
 }
 
-func TestSessionManager_MaxConcurrent(t *testing.T) {
+func TestSessionManager_Get(t *testing.T) {
+	db := newTestDB(t)
+	mgr, err := agent.NewManager(db, 30*time.Minute)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	convID := agent.ComputeConversationID("channel-get", "user-get")
+
+	// Get on an unknown ID should return nil.
+	assert.Nil(t, mgr.Get("nonexistent-id"), "Get should return nil for unknown session ID")
+
+	sess, err := mgr.GetOrCreate(ctx, convID, "channel-get", "user-get")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// Get should return the session by its ID.
+	found := mgr.Get(sess.ID)
+	require.NotNil(t, found, "Get should find the session by ID")
+	assert.Equal(t, sess.ID, found.ID)
+}
+
+func TestSessionManager_ActiveCount(t *testing.T) {
+	db := newTestDB(t)
+	mgr, err := agent.NewManager(db, 30*time.Minute)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	assert.Equal(t, 0, mgr.ActiveCount(), "ActiveCount should be 0 with no sessions")
+
+	convID1 := agent.ComputeConversationID("channel-ac-1", "user-ac-1")
+	_, err = mgr.GetOrCreate(ctx, convID1, "channel-ac-1", "user-ac-1")
+	require.NoError(t, err)
+	assert.Equal(t, 1, mgr.ActiveCount())
+
+	convID2 := agent.ComputeConversationID("channel-ac-2", "user-ac-2")
+	_, err = mgr.GetOrCreate(ctx, convID2, "channel-ac-2", "user-ac-2")
+	require.NoError(t, err)
+	assert.Equal(t, 2, mgr.ActiveCount())
+}
+
+func TestSessionManager_SetMaxConcurrent(t *testing.T) {
+	db := newTestDB(t)
+	mgr, err := agent.NewManager(db, 30*time.Minute)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// Set limit to 2 concurrent sessions.
+	mgr.SetMaxConcurrent(2)
+
+	convID1 := agent.ComputeConversationID("channel-mc-1", "user-mc-1")
+	_, err = mgr.GetOrCreate(ctx, convID1, "channel-mc-1", "user-mc-1")
+	require.NoError(t, err)
+
+	convID2 := agent.ComputeConversationID("channel-mc-2", "user-mc-2")
+	_, err = mgr.GetOrCreate(ctx, convID2, "channel-mc-2", "user-mc-2")
+	require.NoError(t, err)
+
+	// Third session should be rejected.
+	convID3 := agent.ComputeConversationID("channel-mc-3", "user-mc-3")
+	_, err = mgr.GetOrCreate(ctx, convID3, "channel-mc-3", "user-mc-3")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "max concurrent sessions reached")
+}
+
+func TestSessionManager_ConcurrentGetOrCreate(t *testing.T) {
 	db := newTestDB(t)
 	mgr, err := agent.NewManager(db, 30*time.Minute)
 	require.NoError(t, err)
@@ -170,7 +240,8 @@ func TestSessionManager_MaxConcurrent(t *testing.T) {
 			defer wg.Done()
 			channelID := fmt.Sprintf("channel-%d", i)
 			userID := fmt.Sprintf("user-%d", i)
-			sess, err := mgr.GetOrCreate(ctx, channelID, userID)
+			convID := agent.ComputeConversationID(channelID, userID)
+			sess, err := mgr.GetOrCreate(ctx, convID, channelID, userID)
 			errs[i] = err
 			if sess != nil {
 				ids[i] = sess.ID
@@ -201,12 +272,16 @@ func TestSessionManager_CleanupExpired(t *testing.T) {
 	ctx := context.Background()
 
 	// Create 3 sessions and record the ID of the first one for later cache check.
-	firstSess, err := mgr.GetOrCreate(ctx, "channel-0", "user-0")
+	convID0 := agent.ComputeConversationID("channel-0", "user-0")
+	firstSess, err := mgr.GetOrCreate(ctx, convID0, "channel-0", "user-0")
 	require.NoError(t, err, "creating session 0")
 	firstID := firstSess.ID
 
 	for i := 1; i < 3; i++ {
-		_, err := mgr.GetOrCreate(ctx, fmt.Sprintf("channel-%d", i), fmt.Sprintf("user-%d", i))
+		channelID := fmt.Sprintf("channel-%d", i)
+		userID := fmt.Sprintf("user-%d", i)
+		convID := agent.ComputeConversationID(channelID, userID)
+		_, err := mgr.GetOrCreate(ctx, convID, channelID, userID)
 		require.NoError(t, err, "creating session %d", i)
 	}
 
@@ -226,7 +301,7 @@ func TestSessionManager_CleanupExpired(t *testing.T) {
 
 	// Verify the cache was also evicted: GetOrCreate for the first channel/user
 	// pair must return a brand-new session ID, not the stale cached one.
-	sess2, err := mgr.GetOrCreate(ctx, "channel-0", "user-0")
+	sess2, err := mgr.GetOrCreate(ctx, convID0, "channel-0", "user-0")
 	require.NoError(t, err)
 	require.NotNil(t, sess2)
 	assert.NotEqual(t, firstID, sess2.ID,

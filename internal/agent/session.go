@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jrimmer/chandra/internal/channels"
 	"github.com/jrimmer/chandra/store"
 )
 
@@ -19,16 +20,22 @@ type Session struct {
 	ConversationID string    // stable: SHA256 of channel_id + ":" + user_id, hex-encoded, first 16 chars
 	ChannelID      string
 	UserID         string
+	StartedAt      time.Time
 	LastActive     time.Time
-	CreatedAt      time.Time
+
+	// Runtime state — not persisted:
+	cancelFn context.CancelFunc
+	msgChan  chan channels.InboundMessage
 }
 
 // Manager manages sessions for the agent.
 type Manager interface {
-	GetOrCreate(ctx context.Context, channelID, userID string) (*Session, error)
-	Touch(ctx context.Context, sessionID string) error
-	Close(ctx context.Context, sessionID string) error
-	CleanupExpired(ctx context.Context) (int64, error)
+	GetOrCreate(ctx context.Context, conversationID string, channelID string, userID string) (*Session, error)
+	Get(sessionID string) *Session
+	Touch(sessionID string) error
+	Close(sessionID string) error
+	ActiveCount() int
+	SetMaxConcurrent(n int)
 }
 
 // Compile-time assertion that *manager satisfies Manager.
@@ -44,6 +51,10 @@ type manager struct {
 	// It also protects mutations to cached *Session fields (e.g. LastActive).
 	mu    sync.Mutex
 	cache sync.Map // key: "channelID:userID" → *Session
+
+	// maxConcurrent is the maximum number of concurrent sessions allowed.
+	// A value of 0 means unlimited.
+	maxConcurrent int
 
 	// startMu protects cancel and done to prevent data races between Start/Stop.
 	startMu sync.Mutex
@@ -122,11 +133,45 @@ func ComputeConversationID(channelID, userID string) string {
 	return hex.EncodeToString(sum[:])[:16]
 }
 
+// SetMaxConcurrent sets the maximum number of concurrent sessions allowed.
+// A value of 0 means unlimited.
+func (m *manager) SetMaxConcurrent(n int) {
+	m.mu.Lock()
+	m.maxConcurrent = n
+	m.mu.Unlock()
+}
+
+// ActiveCount returns the number of sessions currently in the in-memory cache.
+func (m *manager) ActiveCount() int {
+	count := 0
+	m.cache.Range(func(_, _ any) bool {
+		count++
+		return true
+	})
+	return count
+}
+
+// Get looks up a session by session ID in the in-memory cache.
+// Returns nil if no session with that ID is found.
+func (m *manager) Get(sessionID string) *Session {
+	var found *Session
+	m.cache.Range(func(_, v any) bool {
+		s := v.(*Session)
+		if s.ID == sessionID {
+			found = s
+			return false // stop iteration
+		}
+		return true
+	})
+	return found
+}
+
 // GetOrCreate returns the active session for the given channel/user pair,
 // creating a new one if no session exists or the existing one has expired.
+// The conversationID is passed in by the caller (computed by the channel layer).
 // A mutex ensures only one goroutine per manager can be in the check-and-insert
 // critical section at a time, preventing duplicate INSERT errors.
-func (m *manager) GetOrCreate(ctx context.Context, channelID, userID string) (*Session, error) {
+func (m *manager) GetOrCreate(ctx context.Context, conversationID string, channelID string, userID string) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -149,14 +194,25 @@ func (m *manager) GetOrCreate(ctx context.Context, channelID, userID string) (*S
 		// Session has expired — fall through to create a new one.
 	}
 
-	convID := ComputeConversationID(channelID, userID)
+	// Check max concurrent sessions limit.
+	if m.maxConcurrent > 0 {
+		count := 0
+		m.cache.Range(func(_, _ any) bool {
+			count++
+			return true
+		})
+		if count >= m.maxConcurrent {
+			return nil, fmt.Errorf("session: max concurrent sessions reached")
+		}
+	}
+
 	sess := &Session{
 		ID:             store.NewID(),
-		ConversationID: convID,
+		ConversationID: conversationID,
 		ChannelID:      channelID,
 		UserID:         userID,
+		StartedAt:      now,
 		LastActive:     now,
-		CreatedAt:      now,
 	}
 
 	if err := m.insertDB(ctx, sess); err != nil {
@@ -176,7 +232,7 @@ func (m *manager) insertDB(ctx context.Context, sess *Session) error {
 		sess.ConversationID,
 		sess.ChannelID,
 		sess.UserID,
-		sess.CreatedAt.UnixMilli(),
+		sess.StartedAt.UnixMilli(),
 		sess.LastActive.UnixMilli(),
 	)
 	return err
@@ -184,9 +240,9 @@ func (m *manager) insertDB(ctx context.Context, sess *Session) error {
 
 // Touch updates the last_active timestamp for the given session in both the
 // database and the in-memory cache.
-func (m *manager) Touch(ctx context.Context, sessionID string) error {
+func (m *manager) Touch(sessionID string) error {
 	now := time.Now().UTC()
-	_, err := m.db.ExecContext(ctx,
+	_, err := m.db.ExecContext(context.Background(),
 		`UPDATE sessions SET last_active = ? WHERE id = ?`,
 		now.UnixMilli(),
 		sessionID,
@@ -213,9 +269,9 @@ func (m *manager) Touch(ctx context.Context, sessionID string) error {
 
 // Close removes the session from the database first, then evicts it from the
 // cache only on success.
-func (m *manager) Close(ctx context.Context, sessionID string) error {
+func (m *manager) Close(sessionID string) error {
 	// Delete from DB first.
-	_, err := m.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, sessionID)
+	_, err := m.db.ExecContext(context.Background(), `DELETE FROM sessions WHERE id = ?`, sessionID)
 	if err != nil {
 		return fmt.Errorf("session: close db: %w", err)
 	}
@@ -235,6 +291,7 @@ func (m *manager) Close(ctx context.Context, sessionID string) error {
 
 // CleanupExpired deletes sessions whose last_active timestamp is older than
 // the manager's inactivity timeout. Returns the number of rows deleted.
+// This method is on the concrete type only and is not part of the Manager interface.
 func (m *manager) CleanupExpired(ctx context.Context) (int64, error) {
 	cutoff := time.Now().UTC().Add(-m.timeout).UnixMilli()
 	result, err := m.db.ExecContext(ctx,

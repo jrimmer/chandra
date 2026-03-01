@@ -325,7 +325,7 @@ func run(ctx context.Context, safeMode bool) error {
 					if !ok {
 						return
 					}
-					sess, sessErr := sessionMgr.GetOrCreate(ctx, msg.ChannelID, msg.UserID)
+					sess, sessErr := sessionMgr.GetOrCreate(ctx, msg.ConversationID, msg.ChannelID, msg.UserID)
 					if sessErr != nil {
 						slog.Error("chandrad: discord: session error", "err", sessErr)
 						continue
@@ -495,7 +495,7 @@ func registerHandlers(
 	mem memory.Memory,
 	inStore intent.IntentStore,
 	registry tools.Registry,
-	alog actionlog.Log,
+	alog *actionlog.Log,
 	confirmGate *confirm.Store,
 	db *sql.DB,
 	agentLoop agent.AgentLoop,
@@ -683,7 +683,7 @@ func registerHandlers(
 	srv.Handle("log.today", func(ctx context.Context, _ json.RawMessage) (any, error) {
 		now := time.Now()
 		midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-		actions, err := alog.Query(ctx, midnight, now, "")
+		actions, err := alog.Query(ctx, midnight, now, nil)
 		if err != nil {
 			return nil, fmt.Errorf("log.today: %w", err)
 		}
@@ -721,7 +721,7 @@ func registerHandlers(
 			return nil, fmt.Errorf("log.day: invalid date %q (expected YYYY-MM-DD): %w", p.Date, parseErr)
 		}
 		dayEnd := t.Add(24 * time.Hour)
-		actions, err := alog.Query(ctx, t, dayEnd, "")
+		actions, err := alog.Query(ctx, t, dayEnd, nil)
 		if err != nil {
 			return nil, fmt.Errorf("log.day: %w", err)
 		}
@@ -731,7 +731,7 @@ func registerHandlers(
 	// log.week
 	srv.Handle("log.week", func(ctx context.Context, _ json.RawMessage) (any, error) {
 		weekAgo := time.Now().Add(-7 * 24 * time.Hour)
-		actions, err := alog.Query(ctx, weekAgo, time.Now(), "")
+		actions, err := alog.Query(ctx, weekAgo, time.Now(), nil)
 		if err != nil {
 			return nil, fmt.Errorf("log.week: %w", err)
 		}
