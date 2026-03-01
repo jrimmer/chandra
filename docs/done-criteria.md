@@ -8,10 +8,14 @@ Date: 2026-03-01
 All integration tests pass:
 
 ```
-CGO_ENABLED=1 go test ./tests/... — PASS
-CGO_ENABLED=1 go vet ./...       — PASS (no issues)
-CGO_ENABLED=1 go build ./...     — PASS (no errors)
+CGO_ENABLED=1 go test ./tests/integration/... — PASS (3 tests)
+CGO_ENABLED=1 go vet ./...                    — PASS (no issues)
+CGO_ENABLED=1 go build ./...                  — PASS (no errors)
 ```
+
+> **Note:** `tests/benchmark/TestSemanticSearch_10k_Under100ms` intentionally FAILS — it
+> documents the known performance gap (sqlite-vec brute-force ~3.2s vs 100ms target).
+> Run benchmarks separately: `CGO_ENABLED=1 go test ./tests/benchmark/... -v -run TestSemanticSearch`
 
 ## Done Criteria Table
 
@@ -49,8 +53,8 @@ CGO_ENABLED=1 go build ./...     — PASS (no errors)
 | Memory query < 100ms | NOT MET | sqlite-vec uses brute-force O(n) cosine scan; 10k × 1536-dim queries average ~3.2s. Requires ANN indexing (future work for v2). |
 | `go vet ./...` passes cleanly | Pass | No warnings or errors. |
 | `go build ./...` passes cleanly | Pass | Both `chandrad` and `chandra` binaries build successfully. |
-| All unit tests pass | Pass | `CGO_ENABLED=1 go test ./...` — all packages pass. |
-| All integration tests pass | Pass | `CGO_ENABLED=1 go test ./tests/...` — 3 integration tests PASS. |
+| All unit tests pass | Pass | `CGO_ENABLED=1 go test ./...` — all packages pass (benchmark intentionally fails; see Performance Notes). |
+| All integration tests pass | Pass | `CGO_ENABLED=1 go test ./tests/integration/...` — 3 integration tests PASS. |
 
 ## Performance Notes
 

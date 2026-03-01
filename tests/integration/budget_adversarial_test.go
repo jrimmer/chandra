@@ -61,8 +61,10 @@ func TestIntegration_CBM_Adversarial(t *testing.T) {
 		}
 	}
 
-	// 4. Query semantic memories to build ranked candidates.
-	memories, err := semStore.QueryText(ctx, "test query for adversarial scenario", 200)
+	// 4. Query all seeded memories to build ranked candidates.
+	// Using totalMemories as the limit ensures the CBM receives more candidates
+	// than fit in the budget, forcing it to drop entries — the adversarial scenario.
+	memories, err := semStore.QueryText(ctx, "test query for adversarial scenario", totalMemories)
 	if err != nil {
 		t.Fatalf("semStore.QueryText: %v", err)
 	}
@@ -96,9 +98,12 @@ func TestIntegration_CBM_Adversarial(t *testing.T) {
 		t.Errorf("TotalTokens %d exceeds limit %d", window.TotalTokens, tokenLimit)
 	}
 
-	// 8. Assert: result is a valid ContextWindow (no nil panic, fields accessible).
-	if len(window.Messages) < 1 {
-		t.Errorf("CBM.Assemble returned 0 messages; expected at least 1 (system prompt or user message)")
+	// 8. Assert: adversarial load caused CBM to drop at least one candidate.
+	// With 1000 memories at ~20 tokens each (~20,000 total) and a 4096 token budget,
+	// the CBM must drop the majority of candidates. Dropped == 0 would mean the
+	// budget logic is not working.
+	if window.Dropped == 0 {
+		t.Errorf("CBM.Assemble dropped 0 candidates; expected drops under adversarial load (1000 memories, 4096 token limit)")
 	}
 	t.Logf("CBM adversarial result: TotalTokens=%d, Messages=%d, Dropped=%d",
 		window.TotalTokens, len(window.Messages), window.Dropped)
