@@ -39,7 +39,7 @@ func newTestStore(t *testing.T) *confirm.Store {
 }
 
 // newInMemStore creates a minimal in-memory SQLite store (no migrations) for
-// tests that only need the tool_confirmations table.
+// tests that only need the confirmations table.
 func newInMemStore(t *testing.T) (*confirm.Store, *sql.DB) {
 	t.Helper()
 	db, err := sql.Open("sqlite3", ":memory:")
@@ -120,7 +120,7 @@ func TestConfirmation_CleanupOlderThan7Days(t *testing.T) {
 	// Insert a row with an old created_at directly (8 days ago).
 	oldTime := time.Now().Add(-8 * 24 * time.Hour).UnixMilli()
 	_, err := db.Exec(
-		`INSERT INTO tool_confirmations (id, tool_call, status, created_at, expires_at, updated_at)
+		`INSERT INTO confirmations (id, tool_call, status, created_at, expires_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"old-id", `{"name":"old"}`, "approved",
 		oldTime, oldTime+1000, oldTime,
@@ -137,7 +137,7 @@ func TestConfirmation_CleanupOlderThan7Days(t *testing.T) {
 
 	// The recent one should still be there.
 	var count int
-	err = db.QueryRow(`SELECT COUNT(*) FROM tool_confirmations`).Scan(&count)
+	err = db.QueryRow(`SELECT COUNT(*) FROM confirmations`).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count, "recent confirmation should remain")
 }
@@ -183,7 +183,7 @@ func TestConfirmation_ExpireStale_OnlyPending(t *testing.T) {
 	oldExpiry := time.Now().Add(-1 * time.Minute).UnixMilli()
 	now := time.Now().UnixMilli()
 	_, err := db.Exec(
-		`INSERT INTO tool_confirmations (id, tool_call, status, created_at, expires_at, updated_at)
+		`INSERT INTO confirmations (id, tool_call, status, created_at, expires_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"approved-id", `{"name":"approved"}`, "approved",
 		now, oldExpiry, now,
@@ -192,7 +192,7 @@ func TestConfirmation_ExpireStale_OnlyPending(t *testing.T) {
 
 	// Insert a pending row with a past expiry — should be expired.
 	_, err = db.Exec(
-		`INSERT INTO tool_confirmations (id, tool_call, status, created_at, expires_at, updated_at)
+		`INSERT INTO confirmations (id, tool_call, status, created_at, expires_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"pending-id", `{"name":"pending"}`, "pending",
 		now, oldExpiry, now,

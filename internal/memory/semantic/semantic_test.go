@@ -173,14 +173,23 @@ func TestSemanticStore_ScoreMapping(t *testing.T) {
 }
 
 func TestSemanticStore_DimensionValidation(t *testing.T) {
+	// NewStore now derives the expected dimension from the embedder rather than
+	// a hardcoded constant. A zero or negative dimension is invalid and must
+	// return an error; a valid non-zero dimension (even if different from the
+	// schema's 1536) is accepted at construction time — mismatches are caught
+	// at first insert/query by sqlite-vec.
 	db := newTestDB(t)
-	emb := &mockEmbedder{dims: 768}
 
-	_, err := semantic.NewStore(db, emb)
+	// Invalid (zero) dimension must be rejected.
+	emb0 := &mockEmbedder{dims: 0}
+	_, err := semantic.NewStore(db, emb0)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "dimension mismatch")
-	assert.Contains(t, err.Error(), "768")
-	assert.Contains(t, err.Error(), "1536")
+	assert.Contains(t, err.Error(), "invalid dimension")
+
+	// A valid non-zero dimension is accepted at construction time.
+	emb768 := &mockEmbedder{dims: 768}
+	_, err = semantic.NewStore(db, emb768)
+	require.NoError(t, err, "NewStore should accept any positive dimension at construction time")
 }
 
 func TestSemanticStore_PresetIDAndImportance(t *testing.T) {

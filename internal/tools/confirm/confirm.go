@@ -1,5 +1,5 @@
 // Package confirm implements an async confirmation gate for Tier 4 tool actions.
-// It uses a dedicated SQLite table (tool_confirmations) to persist pending
+// It uses a dedicated SQLite table (confirmations) to persist pending
 // confirmation requests so they survive process restarts.
 package confirm
 
@@ -57,11 +57,11 @@ type Store struct {
 	db *sql.DB
 }
 
-// schema is the DDL for the tool_confirmations table. This table is separate
-// from the confirmations table in the main migration (which has a different
-// shape); we own and create it ourselves.
+// schema ensures the confirmations table exists. The migration (002) creates
+// this table in production; the DDL here is a safety net for test DBs that
+// run without migrations. CREATE TABLE IF NOT EXISTS is idempotent.
 const schema = `
-CREATE TABLE IF NOT EXISTS tool_confirmations (
+CREATE TABLE IF NOT EXISTS confirmations (
     id         TEXT PRIMARY KEY,
     tool_call  TEXT NOT NULL,
     status     TEXT NOT NULL DEFAULT 'pending',
@@ -69,12 +69,11 @@ CREATE TABLE IF NOT EXISTS tool_confirmations (
     expires_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_tool_confirmations_status
-    ON tool_confirmations(status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_confirmations_status
+    ON confirmations(status, expires_at);
 `
 
-// New creates a Store backed by db and ensures the tool_confirmations table
-// exists.
+// New creates a Store backed by db and ensures the confirmations table exists.
 func New(db *sql.DB) (*Store, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("confirm: create schema: %w", err)
@@ -89,7 +88,7 @@ func (s *Store) Create(ctx context.Context, toolCall string, expiresIn time.Dura
 	expiresAt := now.Add(expiresIn)
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO tool_confirmations (id, tool_call, status, created_at, expires_at, updated_at)
+		`INSERT INTO confirmations (id, tool_call, status, created_at, expires_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		id,
 		toolCall,
@@ -118,7 +117,7 @@ func (s *Store) Create(ctx context.Context, toolCall string, expiresIn time.Dura
 func (s *Store) Approve(ctx context.Context, id string) error {
 	now := time.Now().UnixMilli()
 	result, err := s.db.ExecContext(ctx,
-		`UPDATE tool_confirmations SET status = ?, updated_at = ?
+		`UPDATE confirmations SET status = ?, updated_at = ?
 		 WHERE id = ? AND status = 'pending' AND expires_at > ?`,
 		string(StatusApproved), now, id, now,
 	)
@@ -149,7 +148,7 @@ func (s *Store) Reject(ctx context.Context, id string) error {
 	now := time.Now().UnixMilli()
 
 	result, err := s.db.ExecContext(ctx,
-		`UPDATE tool_confirmations SET status = ?, updated_at = ?
+		`UPDATE confirmations SET status = ?, updated_at = ?
 		 WHERE id = ? AND status IN ('pending', 'expired')`,
 		string(StatusRejected), now, id,
 	)
@@ -177,7 +176,7 @@ func (s *Store) ExpireStale(ctx context.Context) (int64, error) {
 	now := time.Now().UnixMilli()
 
 	result, err := s.db.ExecContext(ctx,
-		`UPDATE tool_confirmations SET status = ?, updated_at = ?
+		`UPDATE confirmations SET status = ?, updated_at = ?
 		 WHERE status = 'pending' AND expires_at <= ?`,
 		string(StatusExpired), now, now,
 	)
@@ -197,7 +196,7 @@ func (s *Store) Cleanup(ctx context.Context, olderThan time.Duration) (int64, er
 	cutoff := time.Now().Add(-olderThan).UnixMilli()
 
 	result, err := s.db.ExecContext(ctx,
-		`DELETE FROM tool_confirmations WHERE created_at < ?`,
+		`DELETE FROM confirmations WHERE created_at < ?`,
 		cutoff,
 	)
 	if err != nil {
@@ -222,7 +221,7 @@ func (s *Store) Get(ctx context.Context, id string) (*Confirmation, error) {
 
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, tool_call, status, created_at, expires_at, updated_at
-		 FROM tool_confirmations WHERE id = ?`,
+		 FROM confirmations WHERE id = ?`,
 		id,
 	).Scan(&c.ID, &c.ToolCall, &status, &createdAt, &expiresAt, &updatedAt)
 

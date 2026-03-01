@@ -88,7 +88,9 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 		slog.Warn("agent/loop: failed to load recent episodes", "session_id", session.ID, "error", err)
 	}
 	// Steps 2-3: Retrieve semantic memories and assemble context window.
-	fixed := episodesToCandidates(recentEps)
+	// Prepend identity system prompt as the highest-priority fixed candidate.
+	fixed := buildIdentityCandidate(l.cfg.Memory)
+	fixed = append(fixed, episodesToCandidates(recentEps)...)
 
 	// Step 4: Apply tool allowlist (before assembly so window carries the right tools).
 	availableTools := l.cfg.Registry.All()
@@ -396,4 +398,54 @@ func filterTools(all []pkg.ToolDef, allowed []string) []pkg.ToolDef {
 // word_count * 4/3.
 func estimateTokens(s string) int {
 	return len(strings.Fields(s)) * 4 / 3
+}
+
+// buildIdentityCandidate loads the agent profile and relationship state from
+// memory and returns a single high-priority system-prompt ContextCandidate.
+// If either load fails (e.g. first run before any profile is set), an empty
+// slice is returned so the rest of context assembly proceeds unaffected.
+func buildIdentityCandidate(mem memory.Memory) []budget.ContextCandidate {
+	agentProfile, agentErr := mem.Identity().Agent()
+	if agentErr != nil {
+		// Profile not yet configured — skip rather than error.
+		return nil
+	}
+
+	rel, relErr := mem.Identity().Relationship()
+
+	var sb strings.Builder
+	sb.WriteString("You are ")
+	if agentProfile.Name != "" {
+		sb.WriteString(agentProfile.Name)
+	} else {
+		sb.WriteString("Chandra")
+	}
+	sb.WriteString(".")
+	if agentProfile.Persona != "" {
+		sb.WriteString(" ")
+		sb.WriteString(agentProfile.Persona)
+	}
+	if len(agentProfile.Traits) > 0 {
+		sb.WriteString("\nTraits: ")
+		sb.WriteString(strings.Join(agentProfile.Traits, ", "))
+	}
+
+	if relErr == nil {
+		sb.WriteString(fmt.Sprintf("\nRelationship: trust_level=%d, style=%s",
+			rel.TrustLevel, rel.CommunicationStyle))
+		if len(rel.OngoingContext) > 0 {
+			sb.WriteString("\nActive context: ")
+			sb.WriteString(strings.Join(rel.OngoingContext, "; "))
+		}
+	}
+
+	systemPrompt := sb.String()
+	return []budget.ContextCandidate{
+		{
+			Role:     "system",
+			Content:  systemPrompt,
+			Priority: 1.0,
+			Tokens:   estimateTokens(systemPrompt),
+		},
+	}
 }

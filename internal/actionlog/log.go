@@ -46,7 +46,8 @@ type ToolCount struct {
 type ActionRollup struct {
 	ID          string
 	Period      string
-	PeriodStart time.Time
+	StartTime   time.Time
+	EndTime     time.Time
 	Summary     string
 	ActionCount int
 	ErrorCount  int
@@ -244,12 +245,12 @@ func (l *Log) GenerateRollups(ctx context.Context) error {
 
 	// Daily rollup for today — only if missing.
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	existing, err := l.GetRollup(ctx, "daily", dayStart)
+	existing, err := l.GetRollup(ctx, "day", dayStart)
 	if err != nil {
 		return fmt.Errorf("actionlog: check daily rollup: %w", err)
 	}
 	if existing.ID == "" {
-		if err := l.generatePeriodRollup(ctx, "daily", dayStart, dayStart.Add(24*time.Hour)); err != nil {
+		if err := l.generatePeriodRollup(ctx, "day", dayStart, dayStart.Add(24*time.Hour)); err != nil {
 			return fmt.Errorf("actionlog: generate daily rollup: %w", err)
 		}
 	}
@@ -260,12 +261,12 @@ func (l *Log) GenerateRollups(ctx context.Context) error {
 		weekday = 7 // Sunday → 7 in ISO week
 	}
 	weekStart := time.Date(now.Year(), now.Month(), now.Day()-weekday+1, 0, 0, 0, 0, time.UTC)
-	existingW, err := l.GetRollup(ctx, "weekly", weekStart)
+	existingW, err := l.GetRollup(ctx, "week", weekStart)
 	if err != nil {
 		return fmt.Errorf("actionlog: check weekly rollup: %w", err)
 	}
 	if existingW.ID == "" {
-		if err := l.generatePeriodRollup(ctx, "weekly", weekStart, weekStart.Add(7*24*time.Hour)); err != nil {
+		if err := l.generatePeriodRollup(ctx, "week", weekStart, weekStart.Add(7*24*time.Hour)); err != nil {
 			return fmt.Errorf("actionlog: generate weekly rollup: %w", err)
 		}
 	}
@@ -279,7 +280,7 @@ func (l *Log) GenerateRollups(ctx context.Context) error {
 func (l *Log) generateHourlyRollup(ctx context.Context, hour time.Time) (*ActionRollup, error) {
 	hour = hour.Truncate(time.Hour).UTC()
 	hourEnd := hour.Add(time.Hour)
-	return l.generatePeriodRollupAndReturn(ctx, "hourly", hour, hourEnd)
+	return l.generatePeriodRollupAndReturn(ctx, "hour", hour, hourEnd)
 }
 
 // generatePeriodRollup generates a rollup for an arbitrary named period without returning the result.
@@ -364,7 +365,8 @@ func (l *Log) generatePeriodRollupAndReturn(ctx context.Context, period string, 
 	return &ActionRollup{
 		ID:          id,
 		Period:      period,
-		PeriodStart: start,
+		StartTime:   start,
+		EndTime:     end,
 		Summary:     summary,
 		ActionCount: count,
 		ErrorCount:  errCount,
@@ -446,15 +448,16 @@ func (l *Log) topToolsForPeriod(ctx context.Context, from, to time.Time) ([]Tool
 func (l *Log) GetRollup(ctx context.Context, period string, periodStart time.Time) (ActionRollup, error) {
 	var r ActionRollup
 	var startUnix int64
+	var endUnix sql.NullInt64
 	var topToolsRaw sql.NullString
 	var errorCount sql.NullInt64
 
 	err := l.db.QueryRowContext(ctx,
-		`SELECT id, period, start_time, summary, action_count, error_count, top_tools
+		`SELECT id, period, start_time, end_time, summary, action_count, error_count, top_tools
 		 FROM action_rollups
 		 WHERE period = ? AND start_time = ?`,
 		period, periodStart.Unix(),
-	).Scan(&r.ID, &r.Period, &startUnix, &r.Summary, &r.ActionCount, &errorCount, &topToolsRaw)
+	).Scan(&r.ID, &r.Period, &startUnix, &endUnix, &r.Summary, &r.ActionCount, &errorCount, &topToolsRaw)
 	if err == sql.ErrNoRows {
 		return ActionRollup{}, nil
 	}
@@ -462,7 +465,10 @@ func (l *Log) GetRollup(ctx context.Context, period string, periodStart time.Tim
 		return ActionRollup{}, fmt.Errorf("actionlog: get rollup: %w", err)
 	}
 
-	r.PeriodStart = time.Unix(startUnix, 0).UTC()
+	r.StartTime = time.Unix(startUnix, 0).UTC()
+	if endUnix.Valid {
+		r.EndTime = time.Unix(endUnix.Int64, 0).UTC()
+	}
 	if errorCount.Valid {
 		r.ErrorCount = int(errorCount.Int64)
 	}

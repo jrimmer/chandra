@@ -334,6 +334,39 @@ func run(ctx context.Context, safeMode bool) error {
 		slog.Info("chandrad: agent loop initialized")
 	}
 
+	// Wire scheduler turns: consume sched.Turns() and dispatch to agentLoop.
+	// This goroutine is launched after both sched and agentLoop are initialized.
+	// daemonCtx is set up in Step 13b below; use a local cancel that pairs with
+	// the context we derive there. We use the outer ctx here (set before daemonCtx
+	// is created) and re-use the agentLoop reference captured by closure.
+	// Note: daemonCtx is declared below but its cancellation is wired before
+	// the select at Step 14, so using ctx here is safe for the lifetime of sched.
+	if agentLoop != nil {
+		go func() {
+			for {
+				select {
+				case turn, ok := <-sched.Turns():
+					if !ok {
+						return
+					}
+					// Record the scheduled turn to the ActionLog.
+					_ = alog.Record(ctx, actionlog.ActionEntry{
+						Type:      actionlog.ActionScheduled,
+						Summary:   fmt.Sprintf("scheduled turn for intent %s", turn.IntentID),
+						SessionID: turn.SessionID,
+						Details:   map[string]any{"intent_id": turn.IntentID, "prompt": turn.Prompt},
+					})
+					// Execute the scheduled turn.
+					if err := agentLoop.RunScheduled(ctx, turn); err != nil {
+						slog.Error("scheduled turn failed", "intent", turn.IntentID, "err", err)
+					}
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+
 	// Now launch the Discord processing goroutine — sessionMgr and agentLoop
 	// are fully assigned above so the goroutine sees their final values.
 	if discordConfigured && discordDC != nil {
@@ -428,10 +461,11 @@ func run(ctx context.Context, safeMode bool) error {
 		select {
 		case <-time.After(10 * time.Second):
 			if err := db.PingContext(context.Background()); err != nil {
-				slog.Error("startup health check failed; rolling back config", "err", err)
+				slog.Error("startup health check failed; rolling back config and exiting", "err", err)
 				if rbErr := safeWriter.RollbackToLastGood(); rbErr != nil {
 					slog.Error("config rollback failed", "err", rbErr)
 				}
+				os.Exit(1)
 			}
 		case <-daemonCtx.Done():
 			return
@@ -538,12 +572,10 @@ func resolveConfigPath() (dir, cfgPath string) {
 }
 
 // resolveSocketPath determines the Unix socket path for the API server.
+// It delegates to api.SocketPath() so the daemon and CLI always agree on
+// the socket location.
 func resolveSocketPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "/tmp/chandrad.sock"
-	}
-	return filepath.Join(home, ".local", "share", "chandra", "chandrad.sock")
+	return api.SocketPath()
 }
 
 // buildConfirmRules converts ConfirmationRuleConfig entries from config to ConfirmationRule slice.

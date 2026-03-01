@@ -205,7 +205,7 @@ func TestActionLog_GenerateRollups(t *testing.T) {
 	require.NoError(t, err)
 
 	// GetRollup for a missing period returns zero-value (ID == "").
-	r, err := log.GetRollup(ctx, "hourly", time.Now().Add(-24*time.Hour).Truncate(time.Hour))
+	r, err := log.GetRollup(ctx, "hour", time.Now().Add(-24*time.Hour).Truncate(time.Hour))
 	require.NoError(t, err)
 	assert.Empty(t, r.ID, "rollup for distant past should not exist")
 }

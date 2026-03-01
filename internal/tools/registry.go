@@ -87,12 +87,19 @@ func (r *registry) All() []pkg.ToolDef {
 }
 
 // EnforceCapabilities checks that the tool named in call.Name is registered
-// and that its declared capabilities are valid. Returns an error if the tool
-// is not registered.
+// and that Tier 2 (TrustedTool) instances have a non-empty capability
+// declaration. An empty declaration on a TrustedTool indicates an accidental
+// omission and is rejected to prevent silently unconstrained trusted tools.
 func (r *registry) EnforceCapabilities(call pkg.ToolCall) error {
-	_, ok := r.Get(call.Name)
+	tool, ok := r.Get(call.Name)
 	if !ok {
 		return fmt.Errorf("tools/registry: unknown tool %q", call.Name)
+	}
+	// For Tier 2 (TrustedTool), require at least one declared capability.
+	if tt, isTrusted := tool.(pkg.TrustedTool); isTrusted {
+		if len(tt.DeclaredCapabilities()) == 0 {
+			return fmt.Errorf("tools/registry: Tier 2 tool %q has no declared capabilities", call.Name)
+		}
 	}
 	return nil
 }

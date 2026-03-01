@@ -14,8 +14,6 @@ import (
 	"github.com/jrimmer/chandra/store"
 )
 
-const schemaDimensions = 1536
-
 // SemanticStore defines the contract for semantic memory operations.
 type SemanticStore interface {
 	Store(ctx context.Context, entry pkg.MemoryEntry) error
@@ -29,19 +27,21 @@ var _ SemanticStore = (*Store)(nil)
 
 // Store is a semantic memory store backed by SQLite + sqlite-vec.
 type Store struct {
-	db      *sql.DB
+	db       *sql.DB
 	embedder provider.EmbeddingProvider
+	dims     int // dimension count as reported by the embedder
 }
 
 // NewStore creates a new Store using the provided database connection and
-// embedding provider. Returns an error if the embedder's dimensions do not
-// match the schema (1536).
+// embedding provider. The embedder's declared dimension count is used at
+// runtime; if the SQLite schema was created with a different dimension the
+// first Store/Query call will return a descriptive error from sqlite-vec.
 func NewStore(db *sql.DB, embedder provider.EmbeddingProvider) (*Store, error) {
-	if embedder.Dimensions() != schemaDimensions {
-		return nil, fmt.Errorf("semantic: dimension mismatch: embedder %d != schema %d",
-			embedder.Dimensions(), schemaDimensions)
+	dims := embedder.Dimensions()
+	if dims <= 0 {
+		return nil, fmt.Errorf("semantic: embedder reports invalid dimension count %d", dims)
 	}
-	return &Store{db: db, embedder: embedder}, nil
+	return &Store{db: db, embedder: embedder, dims: dims}, nil
 }
 
 // ComputeImportance derives an importance score from the content text and

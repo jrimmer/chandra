@@ -35,6 +35,29 @@ func newStubTool(name string, caps ...pkg.Capability) *stubTool {
 	}
 }
 
+// stubTrustedTool implements pkg.TrustedTool for capability enforcement tests.
+type stubTrustedTool struct {
+	def  pkg.ToolDef
+	caps []pkg.Capability
+}
+
+func (s *stubTrustedTool) Definition() pkg.ToolDef { return s.def }
+func (s *stubTrustedTool) Execute(_ context.Context, call pkg.ToolCall) (pkg.ToolResult, error) {
+	return pkg.ToolResult{ID: call.ID}, nil
+}
+func (s *stubTrustedTool) DeclaredCapabilities() []pkg.Capability { return s.caps }
+
+func newStubTrustedTool(name string, caps ...pkg.Capability) *stubTrustedTool {
+	return &stubTrustedTool{
+		def: pkg.ToolDef{
+			Name:        name,
+			Description: "trusted stub tool " + name,
+			Tier:        pkg.TierTrusted,
+		},
+		caps: caps,
+	}
+}
+
 func TestRegistry_RegisterAndGet(t *testing.T) {
 	reg, err := tools.NewRegistry(nil)
 	require.NoError(t, err)
@@ -144,4 +167,30 @@ func TestRegistry_NewRegistry_InvalidPatternReturnsError(t *testing.T) {
 	_, err := tools.NewRegistry(rules)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "compile pattern")
+}
+
+func TestRegistry_EnforceCapabilities_TrustedTool_WithCaps(t *testing.T) {
+	reg, err := tools.NewRegistry(nil)
+	require.NoError(t, err)
+
+	tool := newStubTrustedTool("trusted.read", pkg.CapMemoryRead)
+	require.NoError(t, reg.Register(tool))
+
+	call := pkg.ToolCall{ID: "c10", Name: "trusted.read"}
+	err = reg.EnforceCapabilities(call)
+	assert.NoError(t, err, "TrustedTool with declared capabilities should pass")
+}
+
+func TestRegistry_EnforceCapabilities_TrustedTool_EmptyCaps(t *testing.T) {
+	reg, err := tools.NewRegistry(nil)
+	require.NoError(t, err)
+
+	// Register a TrustedTool with no declared capabilities — should fail enforcement.
+	tool := newStubTrustedTool("trusted.empty")
+	require.NoError(t, reg.Register(tool))
+
+	call := pkg.ToolCall{ID: "c11", Name: "trusted.empty"}
+	err = reg.EnforceCapabilities(call)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no declared capabilities")
 }
