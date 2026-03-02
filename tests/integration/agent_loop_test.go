@@ -111,6 +111,7 @@ func (r *noopRegistry) EnforceCapabilities(_ pkg.ToolCall) error                
 func (r *noopRegistry) RequiresConfirmation(_ pkg.ToolCall) (bool, tools.ConfirmationRule) {
 	return false, tools.ConfirmationRule{}
 }
+func (r *noopRegistry) AddTierOverride(_ string, _ pkg.ToolTier) {}
 
 var _ tools.Registry = (*noopRegistry)(nil)
 
