@@ -209,6 +209,7 @@ func (m *mockChannel) ID() string                                               
 func (m *mockChannel) Listen(_ context.Context, _ chan<- channels.InboundMessage) error { return nil }
 func (m *mockChannel) Send(_ context.Context, _ channels.OutboundMessage) error         { return nil }
 func (m *mockChannel) React(_ context.Context, _, _ string) error                       { return nil }
+func (m *mockChannel) SendCheckpoint(_ context.Context, _, _ string) error              { return nil }
 
 var _ channels.Channel = (*mockChannel)(nil)
 
