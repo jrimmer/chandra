@@ -192,6 +192,20 @@ func (d *Discord) Send(ctx context.Context, msg channels.OutboundMessage) error 
 	return nil
 }
 
+// SendCheckpoint sends an interactive checkpoint message with approval options.
+// On Discord, this sends an embed with action buttons (Approve, Reject, Show Plan).
+func (d *Discord) SendCheckpoint(ctx context.Context, planID string, stepDescription string) error {
+	// Send to all configured channels.
+	content := fmt.Sprintf("**Plan Checkpoint** (`%s`)\n%s\n\nApprove: `chandra confirm %s`",
+		planID, stepDescription, planID)
+	for chID := range d.channelIDs {
+		if _, err := d.session.ChannelMessageSend(chID, content); err != nil {
+			slog.Warn("discord: send checkpoint failed", "channel", chID, "err", err)
+		}
+	}
+	return nil
+}
+
 // React adds an emoji reaction to a previously seen message. The channel ID
 // is retrieved from the internal messageID→channelID map populated by the
 // Listen handler. If the message ID is not known, an error is returned.

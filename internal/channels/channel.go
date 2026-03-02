@@ -33,4 +33,7 @@ type Channel interface {
 	Listen(ctx context.Context, msgs chan<- InboundMessage) error
 	Send(ctx context.Context, msg OutboundMessage) error
 	React(ctx context.Context, messageID, emoji string) error
+	// SendCheckpoint sends an interactive checkpoint message with approval options.
+	// Implementations may render buttons (Discord) or text commands (CLI).
+	SendCheckpoint(ctx context.Context, planID string, stepDescription string) error
 }
