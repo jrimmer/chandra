@@ -178,6 +178,14 @@ func TestConfig_ExecutorDefaults(t *testing.T) {
 	}
 }
 
+func TestConfig_InfrastructureCacheTTL(t *testing.T) {
+	cfg := &Config{}
+	applyDefaults(cfg)
+	if cfg.Infrastructure.CacheTTL != "5m" {
+		t.Errorf("expected default cache_ttl 5m, got %q", cfg.Infrastructure.CacheTTL)
+	}
+}
+
 func TestLoad_MissingChannel(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	err := os.WriteFile(path, []byte(`

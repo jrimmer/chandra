@@ -131,6 +131,7 @@ type PlannerConfig struct {
 type InfrastructureConfig struct {
 	DiscoveryInterval  string `toml:"discovery_interval"`
 	MaxConcurrentHosts int    `toml:"max_concurrent_hosts"`
+	CacheTTL           string `toml:"cache_ttl"`
 }
 
 // Config is the top-level configuration struct.
@@ -269,6 +270,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Plans.NotificationRetention == "" {
 		cfg.Plans.NotificationRetention = "168h"
+	}
+	if cfg.Infrastructure.CacheTTL == "" {
+		cfg.Infrastructure.CacheTTL = "5m"
 	}
 }
 
