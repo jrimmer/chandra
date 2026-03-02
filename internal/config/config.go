@@ -114,6 +114,7 @@ type SkillsConfig struct {
 type PlansConfig struct {
 	AutoRollback           bool   `toml:"auto_rollback"`
 	AutoRollbackIdempotent bool   `toml:"auto_rollback_idempotent"`
+	MaxConcurrentPlans     int    `toml:"max_concurrent_plans"`
 	NotificationRetention  string `toml:"notification_retention"`
 }
 
@@ -241,6 +242,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if !cfg.Plans.AutoRollback {
 		cfg.Plans.AutoRollback = true
+	}
+	if cfg.Plans.MaxConcurrentPlans == 0 {
+		cfg.Plans.MaxConcurrentPlans = 3
 	}
 	if cfg.Plans.NotificationRetention == "" {
 		cfg.Plans.NotificationRetention = "168h"
