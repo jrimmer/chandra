@@ -146,6 +146,38 @@ var toolTelemetryCmd = &cobra.Command{
 	},
 }
 
+// ---- skill commands ---------------------------------------------------------
+
+var skillCmd = &cobra.Command{
+	Use:   "skill",
+	Short: "Skill operations",
+}
+
+var skillListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List loaded skills",
+	Run: func(cmd *cobra.Command, args []string) {
+		call("skill.list", nil)
+	},
+}
+
+var skillShowCmd = &cobra.Command{
+	Use:   "show <name>",
+	Short: "Show details of a skill",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		call("skill.show", map[string]string{"name": args[0]})
+	},
+}
+
+var skillReloadCmd = &cobra.Command{
+	Use:   "reload",
+	Short: "Reload skills from disk",
+	Run: func(cmd *cobra.Command, args []string) {
+		call("skill.reload", nil)
+	},
+}
+
 // ---- log command ------------------------------------------------------------
 
 // logFlags holds the parsed flags for the log command.
@@ -207,6 +239,10 @@ func init() {
 	// Tool subcommands.
 	toolCmd.AddCommand(toolListCmd, toolTelemetryCmd)
 	rootCmd.AddCommand(toolCmd)
+
+	// Skill subcommands.
+	skillCmd.AddCommand(skillListCmd, skillShowCmd, skillReloadCmd)
+	rootCmd.AddCommand(skillCmd)
 
 	// Log flags.
 	logCmd.Flags().BoolVar(&logFlags.today, "today", false, "show today's log")
