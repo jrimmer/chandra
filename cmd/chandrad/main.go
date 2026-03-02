@@ -24,6 +24,8 @@ import (
 	"github.com/jrimmer/chandra/internal/channels/discord"
 	"github.com/jrimmer/chandra/internal/config"
 	"github.com/jrimmer/chandra/internal/events"
+	"github.com/jrimmer/chandra/internal/executor"
+	"github.com/jrimmer/chandra/internal/planner"
 	mqttbridge "github.com/jrimmer/chandra/internal/events/mqtt"
 	"github.com/jrimmer/chandra/internal/infra"
 	"github.com/jrimmer/chandra/internal/memory"
@@ -175,7 +177,7 @@ func run(ctx context.Context, safeMode bool) error {
 			toolTimeout = d
 		}
 	}
-	executor := tools.NewExecutor(registry, db, toolTimeout)
+	toolExec := tools.NewExecutor(registry, db, toolTimeout)
 
 	// Confirmation gate.
 	confirmGate, confirmErr := confirm.New(db)
@@ -186,7 +188,7 @@ func run(ctx context.Context, safeMode bool) error {
 
 	// G5: wire confirm store into executor so RequiresConfirmation is enforced.
 	if confirmGate != nil {
-		executor.WithConfirmStore(confirmGate)
+		toolExec.WithConfirmStore(confirmGate)
 	}
 
 	// Action log.
@@ -354,7 +356,7 @@ func run(ctx context.Context, safeMode bool) error {
 			Memory:         mem,
 			Budget:         budgetMgr,
 			Registry:       registry,
-			Executor:       executor,
+			Executor:       toolExec,
 			ActionLog:      alog,
 			Channel:        discordChannel, // G18: wire Discord channel for response sending
 			Sessions:       sessionMgr,     // required for RunScheduled to process turns
@@ -448,7 +450,9 @@ func run(ctx context.Context, safeMode bool) error {
 	defer daemonCancel()
 	cancelDaemon = daemonCancel
 
-	registerHandlers(apiServer, cancelDaemon, startTime, mem, inStore, registry, alog, confirmGate, db, agentLoop, sessionMgr, discordChannel, discordConfigured, skillReg, infraMgr)
+	planExec := executor.NewExecutor(alog)
+	planPlan := planner.NewPlanner(chatProvider, skillReg)
+	registerHandlers(apiServer, cancelDaemon, startTime, mem, inStore, registry, alog, confirmGate, db, agentLoop, sessionMgr, discordChannel, discordConfigured, skillReg, infraMgr, planExec, planPlan)
 
 	socketPath := resolveSocketPath()
 	if err := apiServer.Start(socketPath); err != nil {
@@ -642,9 +646,9 @@ func registerHandlers(
 	discordConfigured bool,
 	skillReg *skills.Registry,
 	infraMgr *infra.Manager,
+	planExecutor *executor.Executor,
+	planPlanner *planner.Planner,
 ) {
-	_ = agentLoop // reserved for future use
-
 	// daemon.health
 	srv.Handle("daemon.health", func(ctx context.Context, _ json.RawMessage) (any, error) {
 		uptime := time.Since(startTime).Seconds()
@@ -1003,6 +1007,77 @@ func registerHandlers(
 		}
 		if err := confirmGate.Approve(ctx, p.ID); err != nil {
 			return nil, fmt.Errorf("confirm.approve: %w", err)
+		}
+		return map[string]any{"ok": true}, nil
+	})
+
+	// plan.list — list execution plans, optionally filtered by status.
+	srv.Handle("plan.list", func(ctx context.Context, params json.RawMessage) (any, error) {
+		var req struct {
+			Status string `json:"status"`
+		}
+		if params != nil {
+			_ = json.Unmarshal(params, &req)
+		}
+		plans := planExecutor.ListPlans(req.Status)
+		return map[string]any{"plans": plans}, nil
+	})
+
+	// plan.show — show plan details with step status.
+	srv.Handle("plan.show", func(ctx context.Context, params json.RawMessage) (any, error) {
+		var req struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, fmt.Errorf("plan.show: invalid params: %w", err)
+		}
+		status, err := planExecutor.Status(req.ID)
+		if err != nil {
+			return nil, fmt.Errorf("plan.show: %w", err)
+		}
+		return status, nil
+	})
+
+	// plan.extend — extend a paused plan's checkpoint timeout.
+	srv.Handle("plan.extend", func(ctx context.Context, params json.RawMessage) (any, error) {
+		var req struct {
+			ID       string `json:"id"`
+			Duration string `json:"duration"`
+		}
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, fmt.Errorf("plan.extend: invalid params: %w", err)
+		}
+		if err := planExecutor.ExtendCheckpoint(req.ID, req.Duration); err != nil {
+			return nil, fmt.Errorf("plan.extend: %w", err)
+		}
+		return map[string]any{"ok": true}, nil
+	})
+
+	// plan.dry_run — decompose a goal into a plan without executing.
+	srv.Handle("plan.dry_run", func(ctx context.Context, params json.RawMessage) (any, error) {
+		var req struct {
+			Goal string `json:"goal"`
+		}
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, fmt.Errorf("plan.dry_run: invalid params: %w", err)
+		}
+		plan, err := planPlanner.Decompose(ctx, req.Goal)
+		if err != nil {
+			return nil, fmt.Errorf("plan.dry_run: %w", err)
+		}
+		return plan, nil
+	})
+
+	// plan.cancel — cancel a running or paused plan.
+	srv.Handle("plan.cancel", func(ctx context.Context, params json.RawMessage) (any, error) {
+		var req struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, fmt.Errorf("plan.cancel: invalid params: %w", err)
+		}
+		if err := planExecutor.Cancel(req.ID); err != nil {
+			return nil, fmt.Errorf("plan.cancel: %w", err)
 		}
 		return map[string]any{"ok": true}, nil
 	})

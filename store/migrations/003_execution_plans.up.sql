@@ -61,3 +61,4 @@ CREATE INDEX IF NOT EXISTS idx_pending_user ON pending_notifications(user_id, de
 -- Add plan correlation to confirmations
 ALTER TABLE confirmations ADD COLUMN plan_id TEXT;
 ALTER TABLE confirmations ADD COLUMN step_index INTEGER;
+CREATE INDEX IF NOT EXISTS idx_confirmations_plan ON confirmations(plan_id) WHERE plan_id IS NOT NULL;

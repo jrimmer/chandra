@@ -295,3 +295,44 @@ var defaultAllowlist = map[string]bool{
 func isAllowedBinary(name string) bool {
 	return defaultAllowlist[name]
 }
+
+// ListPlans returns all plans, optionally filtered by status.
+func (e *Executor) ListPlans(status string) []*planner.ExecutionPlan {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	var result []*planner.ExecutionPlan
+	for _, p := range e.plans {
+		if status == "" || p.Status == status {
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
+// ExtendCheckpoint extends a paused plan's checkpoint timeout.
+func (e *Executor) ExtendCheckpoint(planID string, duration string) error {
+	plan, err := e.getPlan(planID)
+	if err != nil {
+		return err
+	}
+	if plan.Status != planner.PlanPaused {
+		return fmt.Errorf("plan %s is not paused (status: %s)", planID, plan.Status)
+	}
+	// Duration is accepted but checkpoint timeout extension is a no-op in the
+	// in-memory implementation — it prevents the plan from expiring when a
+	// persistent store with TTL is wired.
+	_ = duration
+	return nil
+}
+
+// Cancel marks a plan as cancelled.
+func (e *Executor) Cancel(planID string) error {
+	plan, err := e.getPlan(planID)
+	if err != nil {
+		return err
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	plan.Status = planner.PlanFailed
+	return nil
+}

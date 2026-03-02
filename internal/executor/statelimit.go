@@ -8,7 +8,7 @@ import (
 // Default state size limits.
 const (
 	DefaultMaxStepOutputBytes = 64 * 1024       // 64 KB per step output
-	DefaultMaxPlanStateBytes  = 512 * 1024       // 512 KB for aggregate plan state
+	DefaultMaxPlanStateBytes  = 256 * 1024       // 256 KB for aggregate plan state
 )
 
 // EnforceStepOutputLimit returns an error if the step output exceeds the limit.
