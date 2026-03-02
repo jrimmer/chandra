@@ -10,6 +10,7 @@ import (
 	"github.com/jrimmer/chandra/internal/channels"
 	"github.com/jrimmer/chandra/internal/memory"
 	"github.com/jrimmer/chandra/internal/provider"
+	"github.com/jrimmer/chandra/internal/skills"
 )
 
 // assembleContext retrieves relevant memories and builds a ContextWindow
@@ -60,6 +61,10 @@ func assembleContext(
 					sk.Name, sk.Summary, sk.Name)
 			} else {
 				content = sk.Content
+			}
+			// Wrap generated skill content with boundary tokens.
+			if sk.Generated != nil {
+				content = skills.WrapWithBoundary(content)
 			}
 			// Rough estimate: 1 token ~= 4 chars.
 			tokens := len(content) / 4
