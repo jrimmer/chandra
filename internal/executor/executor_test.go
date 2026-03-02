@@ -257,6 +257,42 @@ func TestExecutor_Status_NotFound(t *testing.T) {
 	}
 }
 
+func TestExecuteCommand_ApprovedSkill_AllowedBinary(t *testing.T) {
+	ctx := withExecContext(context.Background(), ExecFromApprovedSkill)
+	mode, err := executeCommand(ctx, "git status", nil)
+	if err != nil {
+		t.Fatalf("expected no error for allowed binary, got %v", err)
+	}
+	if mode != ExecShellSafe {
+		t.Errorf("expected ExecShellSafe, got %d", mode)
+	}
+}
+
+func TestExecuteCommand_ApprovedSkill_ApprovedTemplate(t *testing.T) {
+	ctx := withExecContext(context.Background(), ExecFromApprovedSkill)
+	templates := []approvedTemplate{
+		{template: "mycli deploy staging *"},
+	}
+	mode, err := executeCommand(ctx, "mycli deploy staging", templates)
+	if err != nil {
+		t.Fatalf("expected no error for approved template, got %v", err)
+	}
+	if mode != ExecShellSafe {
+		t.Errorf("expected ExecShellSafe, got %d", mode)
+	}
+}
+
+func TestExecuteCommand_ApprovedSkill_NoMatch(t *testing.T) {
+	ctx := withExecContext(context.Background(), ExecFromApprovedSkill)
+	templates := []approvedTemplate{
+		{template: "safe-tool run *"},
+	}
+	_, err := executeCommand(ctx, "unknown-tool hack --all", templates)
+	if !errors.Is(err, ErrRequiresConfirmation) {
+		t.Errorf("expected ErrRequiresConfirmation, got %v", err)
+	}
+}
+
 func TestErrRequiresConfirmation(t *testing.T) {
 	err := ErrRequiresConfirmation
 	if err == nil {

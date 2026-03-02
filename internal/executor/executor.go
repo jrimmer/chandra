@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/jrimmer/chandra/internal/planner"
+	"github.com/jrimmer/chandra/internal/skills"
 )
 
 // ErrRequiresConfirmation is returned when a command requires user confirmation.
@@ -213,8 +214,14 @@ func (e *Executor) Status(planID string) (*planner.ExecutionStatus, error) {
 	}, nil
 }
 
+// approvedTemplate wraps an approved command template string for matching.
+type approvedTemplate struct {
+	template string
+}
+
 // executeCommand selects execution mode based on trust context.
-func executeCommand(ctx context.Context, command string) (CommandExecution, error) {
+// templates is an optional list of approved command templates for skill-level trust.
+func executeCommand(ctx context.Context, command string, templates []approvedTemplate) (CommandExecution, error) {
 	ec := getExecContext(ctx)
 	switch ec {
 	case ExecFromBuiltinSkill:
@@ -224,10 +231,18 @@ func executeCommand(ctx context.Context, command string) (CommandExecution, erro
 		return ExecDirect, nil
 	case ExecFromApprovedSkill:
 		parts := strings.Fields(command)
-		if len(parts) > 0 && !isAllowedBinary(parts[0]) {
-			return ExecShellSafe, errors.New("executor: binary not in allowlist")
+		if len(parts) > 0 && isAllowedBinary(parts[0]) {
+			return ExecShellSafe, nil
 		}
-		return ExecShellSafe, nil
+		// Check approved command templates.
+		skillTemplates := make([]skills.ApprovedTemplate, len(templates))
+		for i, t := range templates {
+			skillTemplates[i] = skills.ApprovedTemplate{Template: t.template}
+		}
+		if skills.HasApprovedTemplate(skillTemplates, command) {
+			return ExecShellSafe, nil
+		}
+		return ExecShellSafe, ErrRequiresConfirmation
 	case ExecFromAgentReasoning:
 		return ExecShellFull, ErrRequiresConfirmation
 	default:
