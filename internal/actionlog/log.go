@@ -17,11 +17,15 @@ import (
 type ActionType string
 
 const (
-	ActionToolCall    ActionType = "tool_call"
-	ActionMessageSent ActionType = "message_sent"
-	ActionError       ActionType = "error"
-	ActionScheduled   ActionType = "scheduled"
-	ActionConfirm     ActionType = "confirmation"
+	ActionToolCall     ActionType = "tool_call"
+	ActionMessageSent  ActionType = "message_sent"
+	ActionError        ActionType = "error"
+	ActionScheduled    ActionType = "scheduled"
+	ActionConfirm      ActionType = "confirmation"
+	ActionRollback     ActionType = "rollback"
+	ActionPlanStart    ActionType = "plan_start"
+	ActionPlanEnd      ActionType = "plan_end"
+	ActionPlanExtended ActionType = "plan_extended"
 )
 
 // ActionEntry represents a single recorded agent action.

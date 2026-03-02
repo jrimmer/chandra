@@ -37,6 +37,9 @@ type ToolCall struct {
 	ID         string
 	Name       string
 	Parameters json.RawMessage
+	SkillName  string // Which skill triggered this call (empty for direct)
+	PlanID     string // Which plan this belongs to (empty if ad-hoc)
+	StepIndex  int    // Step index within plan
 }
 
 // ToolErrorKind distinguishes retry-able from terminal errors
