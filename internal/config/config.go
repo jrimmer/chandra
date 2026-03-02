@@ -118,8 +118,13 @@ type PlansConfig struct {
 	NotificationRetention  string `toml:"notification_retention"`
 }
 
-// PlannerConfig holds planner settings (populated in Phase 3).
-type PlannerConfig struct{}
+// PlannerConfig holds planner settings.
+type PlannerConfig struct {
+	MaxSteps             int    `toml:"max_steps"`
+	CheckpointTimeout    string `toml:"checkpoint_timeout"`
+	AllowInfraCreation   bool   `toml:"allow_infra_creation"`
+	AllowSoftwareInstall bool   `toml:"allow_software_install"`
+}
 
 // InfrastructureConfig holds infrastructure awareness settings.
 type InfrastructureConfig struct {
@@ -242,6 +247,18 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Skills.Generator.MaxPendingReview == 0 {
 		cfg.Skills.Generator.MaxPendingReview = 10
+	}
+	if cfg.Planner.MaxSteps == 0 {
+		cfg.Planner.MaxSteps = 20
+	}
+	if cfg.Planner.CheckpointTimeout == "" {
+		cfg.Planner.CheckpointTimeout = "24h"
+	}
+	if !cfg.Planner.AllowInfraCreation {
+		cfg.Planner.AllowInfraCreation = true
+	}
+	if !cfg.Planner.AllowSoftwareInstall {
+		cfg.Planner.AllowSoftwareInstall = true
 	}
 	if !cfg.Plans.AutoRollback {
 		cfg.Plans.AutoRollback = true

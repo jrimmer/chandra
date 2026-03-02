@@ -149,6 +149,23 @@ func TestConfig_SkillsDefaults(t *testing.T) {
 	}
 }
 
+func TestConfig_PlannerDefaults(t *testing.T) {
+	cfg := &Config{}
+	applyDefaults(cfg)
+	if cfg.Planner.MaxSteps != 20 {
+		t.Errorf("expected default max_steps 20, got %d", cfg.Planner.MaxSteps)
+	}
+	if cfg.Planner.CheckpointTimeout != "24h" {
+		t.Errorf("expected default checkpoint_timeout 24h, got %q", cfg.Planner.CheckpointTimeout)
+	}
+	if cfg.Planner.AllowInfraCreation != true {
+		t.Error("expected allow_infra_creation default true")
+	}
+	if cfg.Planner.AllowSoftwareInstall != true {
+		t.Error("expected allow_software_install default true")
+	}
+}
+
 func TestLoad_MissingChannel(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	err := os.WriteFile(path, []byte(`
