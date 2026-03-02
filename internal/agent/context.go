@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/jrimmer/chandra/internal/budget"
 	"github.com/jrimmer/chandra/internal/channels"
@@ -26,15 +27,47 @@ func assembleContext(
 	tokenBudget int,
 	fixed []budget.ContextCandidate,
 	prov provider.Provider,
+	skillCfg *SkillConfig,
 ) (budget.ContextWindow, error) {
 	// Step 2: Retrieve semantic memories relevant to the incoming message.
-	semanticMems, err := mem.Semantic().QueryText(ctx, msg.Content, 5)
-	if err != nil {
-		slog.Warn("agent/context: failed to query semantic memory", "error", err)
+	var ranked []budget.ContextCandidate
+	if mem != nil {
+		semanticMems, err := mem.Semantic().QueryText(ctx, msg.Content, 5)
+		if err != nil {
+			slog.Warn("agent/context: failed to query semantic memory", "error", err)
+		}
+
+		// Step 3: Convert memories to ranked candidates.
+		ranked = memoriesToCandidates(semanticMems)
 	}
 
-	// Step 3: Convert memories to ranked candidates and assemble context window.
-	ranked := memoriesToCandidates(semanticMems)
+	// Inject matched skills as ranked candidates.
+	if skillCfg != nil && skillCfg.Registry != nil {
+		matched := skillCfg.Registry.Match(msg.Content)
+
+		maxMatch := skillCfg.MaxMatches
+		if maxMatch > 0 && len(matched) > maxMatch {
+			matched = matched[:maxMatch]
+		}
+
+		tokenBudgetForSkills := skillCfg.MaxContextTokens
+		usedTokens := 0
+		for _, sk := range matched {
+			// Rough estimate: 1 token ~= 4 chars.
+			tokens := len(sk.Content) / 4
+			if tokenBudgetForSkills > 0 && usedTokens+tokens > tokenBudgetForSkills {
+				break
+			}
+			ranked = append(ranked, budget.ContextCandidate{
+				Role:     "skill",
+				Content:  sk.Content,
+				Priority: float32(skillCfg.Priority),
+				Recency:  time.Now(),
+				Tokens:   tokens,
+			})
+			usedTokens += tokens
+		}
+	}
 
 	window, err := budgetMgr.Assemble(ctx, tokenBudget, fixed, ranked, nil, 0)
 	if err != nil {

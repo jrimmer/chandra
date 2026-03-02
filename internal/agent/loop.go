@@ -14,6 +14,7 @@ import (
 	"github.com/jrimmer/chandra/internal/memory"
 	"github.com/jrimmer/chandra/internal/provider"
 	"github.com/jrimmer/chandra/internal/scheduler"
+	"github.com/jrimmer/chandra/internal/skills"
 	"github.com/jrimmer/chandra/internal/tools"
 	"github.com/jrimmer/chandra/pkg"
 )
@@ -31,6 +32,19 @@ type ContextBudget interface {
 	) (budget.ContextWindow, error)
 }
 
+// SkillMatcher is the subset of skills.Registry used for trigger matching.
+type SkillMatcher interface {
+	Match(message string) []skills.Skill
+}
+
+// SkillConfig carries skill-related settings for context assembly.
+type SkillConfig struct {
+	Registry         SkillMatcher
+	Priority         float64
+	MaxContextTokens int
+	MaxMatches       int
+}
+
 // LoopConfig carries all dependencies for the AgentLoop.
 type LoopConfig struct {
 	Provider      provider.Provider
@@ -40,9 +54,13 @@ type LoopConfig struct {
 	Executor      tools.Executor
 	ActionLog     actionlog.ActionLog
 	Channel       channels.Channel
-	Sessions      Manager             // required for RunScheduled; if nil, scheduled turns are dropped
-	MaxRounds     int                 // max tool call rounds per turn (default: 5)
-	ToolAllowlist map[string][]string // channelID → allowed tool names (nil = all allowed)
+	Sessions       Manager             // required for RunScheduled; if nil, scheduled turns are dropped
+	MaxRounds      int                 // max tool call rounds per turn (default: 5)
+	ToolAllowlist  map[string][]string // channelID → allowed tool names (nil = all allowed)
+	SkillRegistry  SkillMatcher        // optional: matches skills to messages
+	SkillPriority  float64             // default: 0.7
+	SkillMaxTokens int                 // default: 2000
+	SkillMaxMatch  int                 // default: 3
 }
 
 // AgentLoop is the central reasoning cycle for the Chandra agent.
@@ -90,7 +108,29 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 		availableTools = filterTools(availableTools, allowed)
 	}
 
-	window, err := assembleContext(ctx, msg, l.cfg.Memory, l.cfg.Budget, 8000, fixed, l.cfg.Provider)
+	var skillCfg *SkillConfig
+	if l.cfg.SkillRegistry != nil {
+		priority := l.cfg.SkillPriority
+		if priority == 0 {
+			priority = 0.7
+		}
+		maxTokens := l.cfg.SkillMaxTokens
+		if maxTokens == 0 {
+			maxTokens = 2000
+		}
+		maxMatch := l.cfg.SkillMaxMatch
+		if maxMatch == 0 {
+			maxMatch = 3
+		}
+		skillCfg = &SkillConfig{
+			Registry:         l.cfg.SkillRegistry,
+			Priority:         priority,
+			MaxContextTokens: maxTokens,
+			MaxMatches:       maxMatch,
+		}
+	}
+
+	window, err := assembleContext(ctx, msg, l.cfg.Memory, l.cfg.Budget, 8000, fixed, l.cfg.Provider, skillCfg)
 	if err != nil {
 		slog.Warn("agent/loop: budget assembly failed", "error", err)
 		window = budget.ContextWindow{Tools: availableTools}

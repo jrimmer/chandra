@@ -153,6 +153,7 @@ func (m *mockRegistry) EnforceCapabilities(_ pkg.ToolCall) error                
 func (m *mockRegistry) RequiresConfirmation(_ pkg.ToolCall) (bool, tools.ConfirmationRule) {
 	return false, tools.ConfirmationRule{}
 }
+func (m *mockRegistry) AddTierOverride(_ string, _ pkg.ToolTier) {}
 
 var _ tools.Registry = (*mockRegistry)(nil)
 
