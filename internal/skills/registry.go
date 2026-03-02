@@ -11,6 +11,12 @@ import (
 	"time"
 )
 
+// GenerationLock tracks a per-skill lock with heartbeat for abandonment detection.
+type GenerationLock struct {
+	heartbeatAt time.Time
+	done        chan struct{}
+}
+
 // Registry loads, stores, and matches skills.
 type Registry struct {
 	mu              sync.RWMutex
@@ -18,12 +24,15 @@ type Registry struct {
 	unmet           []UnmetSkill
 	skillsDir       string
 	registeredTools map[string]bool
+	genLocks        map[string]*GenerationLock
+	maxPendingReview int
 }
 
 // NewRegistry creates an empty skill registry.
 func NewRegistry() *Registry {
 	return &Registry{
-		skills: make(map[string]Skill),
+		skills:   make(map[string]Skill),
+		genLocks: make(map[string]*GenerationLock),
 	}
 }
 
@@ -225,4 +234,88 @@ func (r *Registry) Approved() []Skill {
 		}
 	}
 	return out
+}
+
+// AcquireGenerationLock attempts to acquire a generation lock for the given skill name.
+// Returns (true, releaseFunc) on success, (false, nil) if already locked.
+// The lock is considered abandoned if heartbeat hasn't been updated in 60 seconds.
+// The release function closes the heartbeat goroutine.
+func (r *Registry) AcquireGenerationLock(skillName string) (acquired bool, release func()) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if lock, held := r.genLocks[skillName]; held {
+		if time.Since(lock.heartbeatAt) < 60*time.Second {
+			return false, nil
+		}
+		// Abandoned lock — clean it up.
+		close(lock.done)
+	}
+
+	done := make(chan struct{})
+	lock := &GenerationLock{
+		heartbeatAt: time.Now(),
+		done:        done,
+	}
+	r.genLocks[skillName] = lock
+
+	// Start heartbeat goroutine.
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				r.mu.Lock()
+				if l, ok := r.genLocks[skillName]; ok && l == lock {
+					l.heartbeatAt = time.Now()
+				}
+				r.mu.Unlock()
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	return true, func() {
+		r.mu.Lock()
+		if l, ok := r.genLocks[skillName]; ok && l == lock {
+			delete(r.genLocks, skillName)
+		}
+		r.mu.Unlock()
+		close(done)
+	}
+}
+
+// HeartbeatGenerationLock manually updates the heartbeat for a generation lock.
+func (r *Registry) HeartbeatGenerationLock(skillName string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if lock, ok := r.genLocks[skillName]; ok {
+		lock.heartbeatAt = time.Now()
+	}
+}
+
+// SetMaxPendingReview sets the maximum number of pending review skills allowed.
+func (r *Registry) SetMaxPendingReview(max int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.maxPendingReview = max
+}
+
+// MaxPendingReviewReached returns true if the number of pending review skills
+// is at or above the configured maximum.
+func (r *Registry) MaxPendingReviewReached() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.maxPendingReview <= 0 {
+		return false
+	}
+	count := 0
+	for _, s := range r.skills {
+		if s.Generated != nil && s.Generated.Status == SkillPendingReview {
+			count++
+		}
+	}
+	return count >= r.maxPendingReview
 }

@@ -114,6 +114,90 @@ func TestRegistry_Load_IgnoresToolsGo(t *testing.T) {
 	}
 }
 
+func TestRegistry_GenerationLock(t *testing.T) {
+	reg := NewRegistry()
+
+	// First caller acquires.
+	acquired, release := reg.AcquireGenerationLock("github")
+	if !acquired {
+		t.Fatal("expected to acquire lock")
+	}
+
+	// Second caller blocked.
+	acquired2, _ := reg.AcquireGenerationLock("github")
+	if acquired2 {
+		t.Error("expected second caller to be blocked")
+	}
+
+	// Release and retry.
+	release()
+	acquired3, release3 := reg.AcquireGenerationLock("github")
+	if !acquired3 {
+		t.Fatal("expected to acquire lock after release")
+	}
+	release3()
+}
+
+func TestRegistry_GenerationLock_DifferentSkills(t *testing.T) {
+	reg := NewRegistry()
+
+	acquired1, release1 := reg.AcquireGenerationLock("github")
+	acquired2, release2 := reg.AcquireGenerationLock("docker")
+
+	if !acquired1 || !acquired2 {
+		t.Error("locks on different skills should not conflict")
+	}
+	release1()
+	release2()
+}
+
+func TestRegistry_GenerationLock_Heartbeat(t *testing.T) {
+	reg := NewRegistry()
+
+	acquired, release := reg.AcquireGenerationLock("github")
+	if !acquired {
+		t.Fatal("expected to acquire lock")
+	}
+	defer release()
+
+	// Heartbeat should update the time.
+	reg.HeartbeatGenerationLock("github")
+
+	// Lock should still be held.
+	acquired2, _ := reg.AcquireGenerationLock("github")
+	if acquired2 {
+		t.Error("expected lock to still be held after heartbeat")
+	}
+}
+
+func TestRegistry_MaxPendingReview(t *testing.T) {
+	reg := NewRegistry()
+	reg.maxPendingReview = 2
+
+	// Register 2 pending skills.
+	_ = reg.Register(Skill{
+		Name:     "skill-a",
+		Generated: &GeneratedMeta{Status: SkillPendingReview},
+	})
+	_ = reg.Register(Skill{
+		Name:     "skill-b",
+		Generated: &GeneratedMeta{Status: SkillPendingReview},
+	})
+
+	// Should reject when at max.
+	if !reg.MaxPendingReviewReached() {
+		t.Error("expected max pending review reached")
+	}
+
+	// Approve one.
+	_ = reg.Approve("skill-a", "tester")
+
+	// Should allow now.
+	if reg.MaxPendingReviewReached() {
+		t.Error("expected max pending review NOT reached after approval")
+	}
+}
+
 func TestRegistry_ApprovalWorkflow(t *testing.T) {
 	reg := NewRegistry()
 	_ = reg.Load(context.Background(), testdataDir(t), nil)
