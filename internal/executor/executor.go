@@ -3,7 +3,9 @@ package executor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/jrimmer/chandra/internal/planner"
 )
@@ -55,6 +57,8 @@ type ExecutorInterface interface {
 type Executor struct {
 	confirmations ConfirmationStore
 	rollbackFunc  func(ctx context.Context, action *planner.RollbackAction) error
+	mu            sync.RWMutex
+	plans         map[string]*planner.ExecutionPlan
 }
 
 // ConfirmationStore is the interface for writing checkpoint confirmations.
@@ -71,17 +75,47 @@ type PlanConfirmation struct {
 
 // NewExecutor creates a new Executor.
 func NewExecutor(actionLog any) *Executor {
-	return &Executor{}
+	return &Executor{
+		plans: make(map[string]*planner.ExecutionPlan),
+	}
+}
+
+// storePlan registers a plan in the executor's in-memory store.
+func (e *Executor) storePlan(plan *planner.ExecutionPlan) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.plans == nil {
+		e.plans = make(map[string]*planner.ExecutionPlan)
+	}
+	e.plans[plan.ID] = plan
+}
+
+// getPlan retrieves a plan from the in-memory store.
+func (e *Executor) getPlan(planID string) (*planner.ExecutionPlan, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	plan, ok := e.plans[planID]
+	if !ok {
+		return nil, fmt.Errorf("executor: plan %q not found", planID)
+	}
+	return plan, nil
 }
 
 // Run executes a plan's steps sequentially, pausing at checkpoints.
 func (e *Executor) Run(ctx context.Context, plan *planner.ExecutionPlan) (*planner.ExecutionResult, error) {
+	e.storePlan(plan)
+	return e.runFrom(ctx, plan, 0)
+}
+
+// runFrom executes plan steps starting from the given index.
+func (e *Executor) runFrom(ctx context.Context, plan *planner.ExecutionPlan, startStep int) (*planner.ExecutionResult, error) {
 	result := &planner.ExecutionResult{
 		PlanID:  plan.ID,
 		Outputs: make(map[string]any),
 	}
 
-	for i, step := range plan.Steps {
+	for i := startStep; i < len(plan.Steps); i++ {
+		step := plan.Steps[i]
 		if step.Checkpoint {
 			// Write confirmation row if store is available.
 			if e.confirmations != nil {
@@ -93,6 +127,8 @@ func (e *Executor) Run(ctx context.Context, plan *planner.ExecutionPlan) (*plann
 			}
 			// Pause at checkpoint.
 			plan.Status = planner.PlanPaused
+			plan.CurrentStep = i
+			plan.CheckpointStep = i
 			result.StepsRun = i
 			result.FailedAt = -1
 			return result, nil
@@ -110,6 +146,7 @@ func (e *Executor) Run(ctx context.Context, plan *planner.ExecutionPlan) (*plann
 		result.StepsRun = i + 1
 	}
 
+	plan.Status = planner.PlanCompleted
 	result.Success = true
 	return result, nil
 }
@@ -121,7 +158,26 @@ func (e *Executor) executeStep(ctx context.Context, plan *planner.ExecutionPlan,
 
 // Resume continues a paused plan from its checkpoint.
 func (e *Executor) Resume(ctx context.Context, planID string, approved bool) (*planner.ExecutionResult, error) {
-	return nil, nil
+	plan, err := e.getPlan(planID)
+	if err != nil {
+		return nil, err
+	}
+
+	if !approved {
+		plan.Status = planner.PlanFailed
+		plan.Error = "checkpoint rejected by user"
+		return &planner.ExecutionResult{
+			PlanID:  planID,
+			Outputs: make(map[string]any),
+		}, nil
+	}
+
+	// Mark checkpoint step as completed and continue from the next step.
+	checkpointIdx := plan.CurrentStep
+	plan.Steps[checkpointIdx].Status = planner.StepCompleted
+	plan.Status = planner.PlanExecuting
+
+	return e.runFrom(ctx, plan, checkpointIdx+1)
 }
 
 // Rollback reverses completed steps in reverse order.
@@ -143,7 +199,18 @@ func (e *Executor) Rollback(ctx context.Context, plan *planner.ExecutionPlan, up
 
 // Status returns the current execution state of a plan.
 func (e *Executor) Status(planID string) (*planner.ExecutionStatus, error) {
-	return nil, nil
+	plan, err := e.getPlan(planID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &planner.ExecutionStatus{
+		PlanID:         plan.ID,
+		State:          plan.Status,
+		CurrentStep:    plan.CurrentStep,
+		CheckpointStep: plan.CheckpointStep,
+		Outputs:        plan.State,
+	}, nil
 }
 
 // executeCommand selects execution mode based on trust context.
