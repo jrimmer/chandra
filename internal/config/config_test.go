@@ -108,6 +108,47 @@ func TestLoad_MalformedTOML(t *testing.T) {
 	assert.Contains(t, err.Error(), "parse config")
 }
 
+func TestConfig_SkillsDefaults(t *testing.T) {
+	cfg := &Config{}
+	applyDefaults(cfg)
+	if cfg.Skills.Directory != "~/.config/chandra/skills" {
+		t.Errorf("expected default skills directory, got %q", cfg.Skills.Directory)
+	}
+	if cfg.Skills.Priority != 0.7 {
+		t.Errorf("expected default priority 0.7, got %f", cfg.Skills.Priority)
+	}
+	if cfg.Skills.MaxContextTokens != 2000 {
+		t.Errorf("expected default max_context_tokens 2000, got %d", cfg.Skills.MaxContextTokens)
+	}
+	if cfg.Skills.MaxMatches != 3 {
+		t.Errorf("expected default max_matches 3, got %d", cfg.Skills.MaxMatches)
+	}
+	if cfg.Skills.AutoReload != true {
+		t.Error("expected auto_reload default true")
+	}
+	if cfg.Skills.RequireValidation != false {
+		t.Error("expected require_validation default false")
+	}
+	if cfg.Skills.Generator.MaxConcurrentGenerations != 1 {
+		t.Errorf("expected default max_concurrent_generations 1, got %d", cfg.Skills.Generator.MaxConcurrentGenerations)
+	}
+	if cfg.Skills.Generator.GenerationTimeout != "5m" {
+		t.Errorf("expected default generation_timeout 5m, got %q", cfg.Skills.Generator.GenerationTimeout)
+	}
+	if cfg.Skills.Generator.MaxPendingReview != 10 {
+		t.Errorf("expected default max_pending_review 10, got %d", cfg.Skills.Generator.MaxPendingReview)
+	}
+	if cfg.Plans.AutoRollback != true {
+		t.Error("expected plans.auto_rollback default true")
+	}
+	if cfg.Plans.AutoRollbackIdempotent != false {
+		t.Error("expected plans.auto_rollback_idempotent default false")
+	}
+	if cfg.Plans.NotificationRetention != "168h" {
+		t.Errorf("expected plans.notification_retention 168h, got %q", cfg.Plans.NotificationRetention)
+	}
+}
+
 func TestLoad_MissingChannel(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	err := os.WriteFile(path, []byte(`

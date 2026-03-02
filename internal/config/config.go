@@ -92,18 +92,53 @@ type ActionLogConfig struct {
 	LLMSummaries bool `toml:"llm_summaries"`
 }
 
+// SkillGeneratorConfig holds skill generation settings.
+type SkillGeneratorConfig struct {
+	MaxConcurrentGenerations int    `toml:"max_concurrent_generations"`
+	GenerationTimeout        string `toml:"generation_timeout"`
+	MaxPendingReview         int    `toml:"max_pending_review"`
+}
+
+// SkillsConfig holds skill loading and matching settings.
+type SkillsConfig struct {
+	Directory         string               `toml:"directory"`
+	Priority          float64              `toml:"priority"`
+	MaxContextTokens  int                  `toml:"max_context_tokens"`
+	MaxMatches        int                  `toml:"max_matches"`
+	RequireValidation bool                 `toml:"require_validation"`
+	AutoReload        bool                 `toml:"auto_reload"`
+	Generator         SkillGeneratorConfig `toml:"generator"`
+}
+
+// PlansConfig holds plan execution settings.
+type PlansConfig struct {
+	AutoRollback           bool   `toml:"auto_rollback"`
+	AutoRollbackIdempotent bool   `toml:"auto_rollback_idempotent"`
+	NotificationRetention  string `toml:"notification_retention"`
+}
+
+// PlannerConfig holds planner settings (populated in Phase 3).
+type PlannerConfig struct{}
+
+// InfrastructureConfig holds infrastructure awareness settings (populated in Phase 4).
+type InfrastructureConfig struct{}
+
 // Config is the top-level configuration struct.
 type Config struct {
-	Agent      AgentConfig      `toml:"agent"`
-	Provider   ProviderConfig   `toml:"provider"`
-	Embeddings EmbeddingsConfig `toml:"embeddings"`
-	Database   DatabaseConfig   `toml:"database"`
-	Budget     BudgetConfig     `toml:"budget"`
-	Scheduler  SchedulerConfig  `toml:"scheduler"`
-	MQTT       MQTTConfig       `toml:"mqtt"`
-	Channels   ChannelsConfig   `toml:"channels"`
-	Tools      ToolsConfig      `toml:"tools"`
-	ActionLog  ActionLogConfig  `toml:"actionlog"`
+	Agent          AgentConfig          `toml:"agent"`
+	Provider       ProviderConfig       `toml:"provider"`
+	Embeddings     EmbeddingsConfig     `toml:"embeddings"`
+	Database       DatabaseConfig       `toml:"database"`
+	Budget         BudgetConfig         `toml:"budget"`
+	Scheduler      SchedulerConfig      `toml:"scheduler"`
+	MQTT           MQTTConfig           `toml:"mqtt"`
+	Channels       ChannelsConfig       `toml:"channels"`
+	Tools          ToolsConfig          `toml:"tools"`
+	ActionLog      ActionLogConfig      `toml:"actionlog"`
+	Skills         SkillsConfig         `toml:"skills"`
+	Plans          PlansConfig          `toml:"plans"`
+	Planner        PlannerConfig        `toml:"planner"`
+	Infrastructure InfrastructureConfig `toml:"infrastructure"`
 }
 
 // Load reads and parses the TOML config file at path, performs env var
@@ -179,6 +214,36 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Embeddings.Dimensions == 0 {
 		cfg.Embeddings.Dimensions = 1536
+	}
+	if cfg.Skills.Directory == "" {
+		cfg.Skills.Directory = "~/.config/chandra/skills"
+	}
+	if cfg.Skills.Priority == 0 {
+		cfg.Skills.Priority = 0.7
+	}
+	if cfg.Skills.MaxContextTokens == 0 {
+		cfg.Skills.MaxContextTokens = 2000
+	}
+	if cfg.Skills.MaxMatches == 0 {
+		cfg.Skills.MaxMatches = 3
+	}
+	if !cfg.Skills.AutoReload {
+		cfg.Skills.AutoReload = true
+	}
+	if cfg.Skills.Generator.MaxConcurrentGenerations == 0 {
+		cfg.Skills.Generator.MaxConcurrentGenerations = 1
+	}
+	if cfg.Skills.Generator.GenerationTimeout == "" {
+		cfg.Skills.Generator.GenerationTimeout = "5m"
+	}
+	if cfg.Skills.Generator.MaxPendingReview == 0 {
+		cfg.Skills.Generator.MaxPendingReview = 10
+	}
+	if !cfg.Plans.AutoRollback {
+		cfg.Plans.AutoRollback = true
+	}
+	if cfg.Plans.NotificationRetention == "" {
+		cfg.Plans.NotificationRetention = "168h"
 	}
 }
 
