@@ -336,3 +336,55 @@ func (e *Executor) Cancel(planID string) error {
 	plan.Status = planner.PlanFailed
 	return nil
 }
+
+// Retry re-runs a failed plan from its failed step.
+func (e *Executor) Retry(ctx context.Context, planID string) (*planner.ExecutionResult, error) {
+	plan, err := e.getPlan(planID)
+	if err != nil {
+		return nil, err
+	}
+	if plan.Status != planner.PlanFailed && plan.Status != planner.PlanFailedAwaitingDecision {
+		return nil, fmt.Errorf("plan %s is not in a failed state (status: %s)", planID, plan.Status)
+	}
+	// Find the failed step and restart from there.
+	failedStep := plan.CurrentStep
+	plan.Status = planner.PlanExecuting
+	plan.Error = ""
+	return e.runFrom(ctx, plan, failedStep)
+}
+
+// RollbackPlan rolls back a failed plan's completed steps.
+func (e *Executor) RollbackPlan(ctx context.Context, planID string) error {
+	plan, err := e.getPlan(planID)
+	if err != nil {
+		return err
+	}
+	if plan.Status != planner.PlanFailed && plan.Status != planner.PlanFailedAwaitingDecision {
+		return fmt.Errorf("plan %s is not in a failed state (status: %s)", planID, plan.Status)
+	}
+	upTo := plan.CurrentStep - 1
+	if upTo < 0 {
+		upTo = 0
+	}
+	if err := e.Rollback(ctx, plan, upTo); err != nil {
+		plan.Status = planner.PlanRolledBackPartial
+		return err
+	}
+	plan.Status = planner.PlanRolledBack
+	return nil
+}
+
+// Abandon marks a failed plan as completed without rollback.
+func (e *Executor) Abandon(planID string) error {
+	plan, err := e.getPlan(planID)
+	if err != nil {
+		return err
+	}
+	if plan.Status != planner.PlanFailed && plan.Status != planner.PlanFailedAwaitingDecision {
+		return fmt.Errorf("plan %s is not in a failed state (status: %s)", planID, plan.Status)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	plan.Status = planner.PlanCompleted
+	return nil
+}

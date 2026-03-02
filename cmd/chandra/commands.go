@@ -265,6 +265,52 @@ var planCancelCmd = &cobra.Command{
 	},
 }
 
+var planRunCmd = &cobra.Command{
+	Use:   "run <goal>",
+	Short: "Decompose a goal into a plan and execute it",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		dryRun, _ := cmd.Flags().GetBool("dry-run")
+		call("plan.run", map[string]any{"goal": args[0], "dry_run": dryRun})
+	},
+}
+
+var planResumeCmd = &cobra.Command{
+	Use:   "resume <id>",
+	Short: "Resume a paused plan from its checkpoint",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		call("plan.resume", map[string]any{"id": args[0], "approved": true})
+	},
+}
+
+var planRetryCmd = &cobra.Command{
+	Use:   "retry <id>",
+	Short: "Retry a failed plan from its failed step",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		call("plan.retry", map[string]string{"id": args[0]})
+	},
+}
+
+var planRollbackCmd = &cobra.Command{
+	Use:   "rollback <id>",
+	Short: "Rollback a failed plan's completed steps",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		call("plan.rollback", map[string]string{"id": args[0]})
+	},
+}
+
+var planAbandonCmd = &cobra.Command{
+	Use:   "abandon <id>",
+	Short: "Mark a failed plan as complete without rollback",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		call("plan.abandon", map[string]string{"id": args[0]})
+	},
+}
+
 // ---- infra commands ---------------------------------------------------------
 
 var infraCmd = &cobra.Command{
@@ -367,7 +413,8 @@ func init() {
 	// Plan subcommands.
 	planListCmd.Flags().String("status", "", "filter by plan status")
 	planExtendCmd.Flags().String("duration", "24h", "extension duration")
-	planCmd.AddCommand(planListCmd, planShowCmd, planExtendCmd, planDryRunCmd, planCancelCmd)
+	planRunCmd.Flags().Bool("dry-run", false, "decompose without executing")
+	planCmd.AddCommand(planListCmd, planShowCmd, planExtendCmd, planDryRunCmd, planCancelCmd, planRunCmd, planResumeCmd, planRetryCmd, planRollbackCmd, planAbandonCmd)
 	rootCmd.AddCommand(planCmd)
 
 	// Infra subcommands.

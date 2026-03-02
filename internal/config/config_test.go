@@ -111,8 +111,8 @@ func TestLoad_MalformedTOML(t *testing.T) {
 func TestConfig_SkillsDefaults(t *testing.T) {
 	cfg := &Config{}
 	applyDefaults(cfg)
-	if cfg.Skills.Directory != "~/.config/chandra/skills" {
-		t.Errorf("expected default skills directory, got %q", cfg.Skills.Directory)
+	if cfg.Skills.Path != "~/.config/chandra/skills" {
+		t.Errorf("expected default skills path, got %q", cfg.Skills.Path)
 	}
 	if cfg.Skills.Priority != 0.7 {
 		t.Errorf("expected default priority 0.7, got %f", cfg.Skills.Priority)
@@ -137,9 +137,6 @@ func TestConfig_SkillsDefaults(t *testing.T) {
 	}
 	if cfg.Skills.Generator.MaxPendingReview != 10 {
 		t.Errorf("expected default max_pending_review 10, got %d", cfg.Skills.Generator.MaxPendingReview)
-	}
-	if cfg.Plans.AutoRollback != true {
-		t.Error("expected plans.auto_rollback default true")
 	}
 	if cfg.Plans.AutoRollbackIdempotent != false {
 		t.Error("expected plans.auto_rollback_idempotent default false")
@@ -169,12 +166,20 @@ func TestConfig_PlannerDefaults(t *testing.T) {
 func TestConfig_ExecutorDefaults(t *testing.T) {
 	cfg := &Config{}
 	applyDefaults(cfg)
-	if cfg.Plans.ParallelSteps != false {
+	if cfg.Executor.ParallelSteps != false {
 		t.Error("expected parallel_steps default false")
 	}
-	// AutoRollback already exists and defaults to true — verify it still works
-	if cfg.Plans.AutoRollback != true {
-		t.Error("expected auto_rollback default true")
+	if cfg.Executor.RollbackOnFailure != false {
+		t.Error("expected rollback_on_failure default false")
+	}
+	if cfg.Executor.MaxConcurrentPlans != 2 {
+		t.Errorf("expected max_concurrent_plans 2, got %d", cfg.Executor.MaxConcurrentPlans)
+	}
+	if cfg.Executor.MaxConcurrentSteps != 3 {
+		t.Errorf("expected max_concurrent_steps 3, got %d", cfg.Executor.MaxConcurrentSteps)
+	}
+	if cfg.Executor.StepTimeout != "10m" {
+		t.Errorf("expected step_timeout 10m, got %q", cfg.Executor.StepTimeout)
 	}
 }
 

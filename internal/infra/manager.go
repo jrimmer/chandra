@@ -39,7 +39,7 @@ func NewManager() *Manager {
 		hosts:              make(map[string]Host),
 		services:           make(map[string]Service),
 		reachability:       make(map[string]*HostReachability),
-		MaxConcurrentHosts: 10, // default
+		MaxConcurrentHosts: 5, // default per design spec
 	}
 }
 

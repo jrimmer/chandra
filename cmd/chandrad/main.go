@@ -203,7 +203,7 @@ func run(ctx context.Context, safeMode bool) error {
 	// Step 5b: Initialize skill registry.
 	// -------------------------------------------------------------------
 	skillReg := skills.NewRegistry()
-	expandedSkillDir := expandPath(cfg.Skills.Directory)
+	expandedSkillDir := expandPath(cfg.Skills.Path)
 	if err := skillReg.Load(ctx, expandedSkillDir, registeredToolNames(registry)); err != nil {
 		slog.Warn("chandrad: skills load failed", "err", err)
 	} else {
@@ -1078,6 +1078,88 @@ func registerHandlers(
 		}
 		if err := planExecutor.Cancel(req.ID); err != nil {
 			return nil, fmt.Errorf("plan.cancel: %w", err)
+		}
+		return map[string]any{"ok": true}, nil
+	})
+
+	// plan.run — execute a plan (decompose goal then run).
+	srv.Handle("plan.run", func(ctx context.Context, params json.RawMessage) (any, error) {
+		var req struct {
+			Goal   string `json:"goal"`
+			DryRun bool   `json:"dry_run"`
+		}
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, fmt.Errorf("plan.run: invalid params: %w", err)
+		}
+		plan, err := planPlanner.Decompose(ctx, req.Goal)
+		if err != nil {
+			return nil, fmt.Errorf("plan.run: decompose: %w", err)
+		}
+		if req.DryRun {
+			return plan, nil
+		}
+		result, err := planExecutor.Run(ctx, plan)
+		if err != nil {
+			return nil, fmt.Errorf("plan.run: execute: %w", err)
+		}
+		return result, nil
+	})
+
+	// plan.resume — resume a paused plan from its checkpoint.
+	srv.Handle("plan.resume", func(ctx context.Context, params json.RawMessage) (any, error) {
+		var req struct {
+			ID       string `json:"id"`
+			Approved bool   `json:"approved"`
+		}
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, fmt.Errorf("plan.resume: invalid params: %w", err)
+		}
+		result, err := planExecutor.Resume(ctx, req.ID, req.Approved)
+		if err != nil {
+			return nil, fmt.Errorf("plan.resume: %w", err)
+		}
+		return result, nil
+	})
+
+	// plan.retry — retry a failed plan from its failed step.
+	srv.Handle("plan.retry", func(ctx context.Context, params json.RawMessage) (any, error) {
+		var req struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, fmt.Errorf("plan.retry: invalid params: %w", err)
+		}
+		result, err := planExecutor.Retry(ctx, req.ID)
+		if err != nil {
+			return nil, fmt.Errorf("plan.retry: %w", err)
+		}
+		return result, nil
+	})
+
+	// plan.rollback — rollback a failed plan's completed steps.
+	srv.Handle("plan.rollback", func(ctx context.Context, params json.RawMessage) (any, error) {
+		var req struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, fmt.Errorf("plan.rollback: invalid params: %w", err)
+		}
+		if err := planExecutor.RollbackPlan(ctx, req.ID); err != nil {
+			return nil, fmt.Errorf("plan.rollback: %w", err)
+		}
+		return map[string]any{"ok": true}, nil
+	})
+
+	// plan.abandon — abandon a failed plan without rollback.
+	srv.Handle("plan.abandon", func(ctx context.Context, params json.RawMessage) (any, error) {
+		var req struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, fmt.Errorf("plan.abandon: invalid params: %w", err)
+		}
+		if err := planExecutor.Abandon(req.ID); err != nil {
+			return nil, fmt.Errorf("plan.abandon: %w", err)
 		}
 		return map[string]any{"ok": true}, nil
 	})

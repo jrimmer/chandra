@@ -101,7 +101,7 @@ type SkillGeneratorConfig struct {
 
 // SkillsConfig holds skill loading and matching settings.
 type SkillsConfig struct {
-	Directory         string               `toml:"directory"`
+	Path              string               `toml:"path"`
 	Priority          float64              `toml:"priority"`
 	MaxContextTokens  int                  `toml:"max_context_tokens"`
 	MaxMatches        int                  `toml:"max_matches"`
@@ -110,13 +110,19 @@ type SkillsConfig struct {
 	Generator         SkillGeneratorConfig `toml:"generator"`
 }
 
+// ExecutorConfig holds executor settings (maps to [executor] in TOML).
+type ExecutorConfig struct {
+	ParallelSteps      bool   `toml:"parallel_steps"`
+	RollbackOnFailure  bool   `toml:"rollback_on_failure"`
+	MaxConcurrentPlans int    `toml:"max_concurrent_plans"`
+	MaxConcurrentSteps int    `toml:"max_concurrent_steps"`
+	StepTimeout        string `toml:"step_timeout"`
+}
+
 // PlansConfig holds plan execution settings.
 type PlansConfig struct {
-	AutoRollback           bool   `toml:"auto_rollback"`
 	AutoRollbackIdempotent bool   `toml:"auto_rollback_idempotent"`
-	MaxConcurrentPlans     int    `toml:"max_concurrent_plans"`
 	NotificationRetention  string `toml:"notification_retention"`
-	ParallelSteps          bool   `toml:"parallel_steps"`
 }
 
 // PlannerConfig holds planner settings.
@@ -131,6 +137,7 @@ type PlannerConfig struct {
 type InfrastructureConfig struct {
 	DiscoveryInterval  string `toml:"discovery_interval"`
 	MaxConcurrentHosts int    `toml:"max_concurrent_hosts"`
+	HostTimeout        string `toml:"host_timeout"`
 	CacheTTL           string `toml:"cache_ttl"`
 }
 
@@ -147,6 +154,7 @@ type Config struct {
 	Tools          ToolsConfig          `toml:"tools"`
 	ActionLog      ActionLogConfig      `toml:"actionlog"`
 	Skills         SkillsConfig         `toml:"skills"`
+	Executor       ExecutorConfig       `toml:"executor"`
 	Plans          PlansConfig          `toml:"plans"`
 	Planner        PlannerConfig        `toml:"planner"`
 	Infrastructure InfrastructureConfig `toml:"infrastructure"`
@@ -226,8 +234,8 @@ func applyDefaults(cfg *Config) {
 	if cfg.Embeddings.Dimensions == 0 {
 		cfg.Embeddings.Dimensions = 1536
 	}
-	if cfg.Skills.Directory == "" {
-		cfg.Skills.Directory = "~/.config/chandra/skills"
+	if cfg.Skills.Path == "" {
+		cfg.Skills.Path = "~/.config/chandra/skills"
 	}
 	if cfg.Skills.Priority == 0 {
 		cfg.Skills.Priority = 0.7
@@ -262,14 +270,20 @@ func applyDefaults(cfg *Config) {
 	if !cfg.Planner.AllowSoftwareInstall {
 		cfg.Planner.AllowSoftwareInstall = true
 	}
-	if !cfg.Plans.AutoRollback {
-		cfg.Plans.AutoRollback = true
+	if cfg.Executor.MaxConcurrentPlans == 0 {
+		cfg.Executor.MaxConcurrentPlans = 2
 	}
-	if cfg.Plans.MaxConcurrentPlans == 0 {
-		cfg.Plans.MaxConcurrentPlans = 3
+	if cfg.Executor.MaxConcurrentSteps == 0 {
+		cfg.Executor.MaxConcurrentSteps = 3
+	}
+	if cfg.Executor.StepTimeout == "" {
+		cfg.Executor.StepTimeout = "10m"
 	}
 	if cfg.Plans.NotificationRetention == "" {
 		cfg.Plans.NotificationRetention = "168h"
+	}
+	if cfg.Infrastructure.HostTimeout == "" {
+		cfg.Infrastructure.HostTimeout = "30s"
 	}
 	if cfg.Infrastructure.CacheTTL == "" {
 		cfg.Infrastructure.CacheTTL = "5m"
