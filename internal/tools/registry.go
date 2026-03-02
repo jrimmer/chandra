@@ -25,14 +25,16 @@ type Registry interface {
 	All() []pkg.ToolDef
 	EnforceCapabilities(call pkg.ToolCall) error
 	RequiresConfirmation(call pkg.ToolCall) (bool, ConfirmationRule)
+	AddTierOverride(name string, tier pkg.ToolTier)
 }
 
 // Compile-time assertion that *registry satisfies Registry.
 var _ Registry = (*registry)(nil)
 
 type registry struct {
-	tools         sync.Map // map[string]pkg.Tool
-	confirmRules  []ConfirmationRule
+	tools          sync.Map // map[string]pkg.Tool
+	confirmRules   []ConfirmationRule
+	tierOverrides  sync.Map // map[string]pkg.ToolTier
 }
 
 // NewRegistry creates a new registry. All regex patterns in confirmRules are
@@ -114,4 +116,11 @@ func (r *registry) RequiresConfirmation(call pkg.ToolCall) (bool, ConfirmationRu
 		}
 	}
 	return false, ConfirmationRule{}
+}
+
+// AddTierOverride registers a tier override for a tool by name.
+// When resolving a tool's tier, overrides take precedence over the tool's
+// self-declared tier.
+func (r *registry) AddTierOverride(name string, tier pkg.ToolTier) {
+	r.tierOverrides.Store(name, tier)
 }
