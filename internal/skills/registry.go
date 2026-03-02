@@ -2,11 +2,13 @@ package skills
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Registry loads, stores, and matches skills.
@@ -131,6 +133,7 @@ func (r *Registry) Unmet() []UnmetSkill {
 
 // Match returns skills whose triggers match words in the message.
 // Matching is case-insensitive and checks for substring presence.
+// Unapproved generated skills are excluded from results.
 func (r *Registry) Match(message string) []Skill {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -139,6 +142,10 @@ func (r *Registry) Match(message string) []Skill {
 	var matches []Skill
 
 	for _, skill := range r.skills {
+		// Skip unapproved generated skills.
+		if skill.Generated != nil && skill.Generated.Status != SkillApproved {
+			continue
+		}
 		for _, trigger := range skill.Triggers {
 			if strings.Contains(lower, strings.ToLower(trigger)) {
 				matches = append(matches, skill)
@@ -148,4 +155,74 @@ func (r *Registry) Match(message string) []Skill {
 	}
 
 	return matches
+}
+
+// Register adds a skill to the registry (used for generated skills).
+func (r *Registry) Register(skill Skill) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.skills[skill.Name] = skill
+	return nil
+}
+
+// Approve marks a generated skill as approved.
+func (r *Registry) Approve(name, reviewer string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.skills[name]
+	if !ok {
+		return fmt.Errorf("skill not found: %s", name)
+	}
+	if s.Generated == nil {
+		return fmt.Errorf("skill %s is not generated", name)
+	}
+	s.Generated.Status = SkillApproved
+	s.Generated.Reviewer = reviewer
+	s.Generated.ReviewedAt = time.Now()
+	r.skills[name] = s
+	return nil
+}
+
+// Reject marks a generated skill as rejected.
+func (r *Registry) Reject(name, reviewer string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.skills[name]
+	if !ok {
+		return fmt.Errorf("skill not found: %s", name)
+	}
+	if s.Generated == nil {
+		return fmt.Errorf("skill %s is not generated", name)
+	}
+	s.Generated.Status = SkillRejected
+	s.Generated.Reviewer = reviewer
+	s.Generated.ReviewedAt = time.Now()
+	r.skills[name] = s
+	return nil
+}
+
+// PendingReview returns all skills pending review.
+func (r *Registry) PendingReview() []Skill {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []Skill
+	for _, s := range r.skills {
+		if s.Generated != nil && s.Generated.Status == SkillPendingReview {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// Approved returns all skills that are either non-generated or approved.
+func (r *Registry) Approved() []Skill {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []Skill
+	for _, s := range r.skills {
+		if s.Generated == nil || s.Generated.Status == SkillApproved {
+			out = append(out, s)
+		}
+	}
+	return out
 }

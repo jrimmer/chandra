@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func testdataDir(t *testing.T) string {
@@ -110,5 +111,85 @@ func TestRegistry_Load_IgnoresToolsGo(t *testing.T) {
 	err := reg.Load(context.Background(), testdataDir(t), nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRegistry_ApprovalWorkflow(t *testing.T) {
+	reg := NewRegistry()
+	_ = reg.Load(context.Background(), testdataDir(t), nil)
+
+	generated := Skill{
+		Name:     "docker",
+		Triggers: []string{"docker", "container"},
+		Content:  "# Docker Skill",
+		Generated: &GeneratedMeta{
+			By:     "chandra",
+			Date:   time.Now(),
+			Source: "docker --help exploration",
+			Status: SkillPendingReview,
+		},
+	}
+	err := reg.Register(generated)
+	if err != nil {
+		t.Fatalf("register failed: %v", err)
+	}
+
+	// Should appear in PendingReview but NOT in Match results.
+	pending := reg.PendingReview()
+	if len(pending) != 1 || pending[0].Name != "docker" {
+		t.Errorf("expected docker in pending, got %v", pending)
+	}
+
+	matches := reg.Match("start a docker container")
+	for _, m := range matches {
+		if m.Name == "docker" {
+			t.Error("pending skill should not appear in Match results")
+		}
+	}
+
+	// Approve it.
+	err = reg.Approve("docker", "sal")
+	if err != nil {
+		t.Fatalf("approve failed: %v", err)
+	}
+
+	// Now it should match.
+	matches = reg.Match("start a docker container")
+	found := false
+	for _, m := range matches {
+		if m.Name == "docker" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("approved skill should appear in Match results")
+	}
+
+	// PendingReview should be empty.
+	if len(reg.PendingReview()) != 0 {
+		t.Error("expected no pending skills after approval")
+	}
+}
+
+func TestRegistry_Reject(t *testing.T) {
+	reg := NewRegistry()
+	generated := Skill{
+		Name:     "bad-skill",
+		Triggers: []string{"bad-skill"},
+		Generated: &GeneratedMeta{
+			Status: SkillPendingReview,
+		},
+	}
+	_ = reg.Register(generated)
+
+	err := reg.Reject("bad-skill", "sal")
+	if err != nil {
+		t.Fatalf("reject failed: %v", err)
+	}
+
+	// Should not appear in any listing.
+	matches := reg.Match("bad-skill")
+	if len(matches) != 0 {
+		t.Error("rejected skill should not match")
 	}
 }

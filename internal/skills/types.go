@@ -1,6 +1,10 @@
 package skills
 
-import "github.com/jrimmer/chandra/pkg"
+import (
+	"time"
+
+	"github.com/jrimmer/chandra/pkg"
+)
 
 // SkillStatus represents the approval status of a generated skill.
 type SkillStatus string
@@ -13,9 +17,13 @@ const (
 
 // GeneratedMeta holds metadata for auto-generated skills.
 type GeneratedMeta struct {
-	Status    SkillStatus `yaml:"status"`
-	Source    string      `yaml:"source"`
-	CreatedAt string     `yaml:"created_at"`
+	By         string      `yaml:"by"`
+	Date       time.Time   `yaml:"date"`
+	Source     string      `yaml:"source"`
+	Status     SkillStatus `yaml:"status"`
+	CreatedAt  string      `yaml:"created_at"`
+	Reviewer   string      `yaml:"-"`
+	ReviewedAt time.Time   `yaml:"-"`
 }
 
 // Skill represents a loaded SKILL.md with parsed metadata and content.
