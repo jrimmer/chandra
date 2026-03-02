@@ -166,6 +166,18 @@ func TestConfig_PlannerDefaults(t *testing.T) {
 	}
 }
 
+func TestConfig_ExecutorDefaults(t *testing.T) {
+	cfg := &Config{}
+	applyDefaults(cfg)
+	if cfg.Plans.ParallelSteps != false {
+		t.Error("expected parallel_steps default false")
+	}
+	// AutoRollback already exists and defaults to true — verify it still works
+	if cfg.Plans.AutoRollback != true {
+		t.Error("expected auto_rollback default true")
+	}
+}
+
 func TestLoad_MissingChannel(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	err := os.WriteFile(path, []byte(`

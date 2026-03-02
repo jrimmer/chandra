@@ -116,6 +116,7 @@ type PlansConfig struct {
 	AutoRollbackIdempotent bool   `toml:"auto_rollback_idempotent"`
 	MaxConcurrentPlans     int    `toml:"max_concurrent_plans"`
 	NotificationRetention  string `toml:"notification_retention"`
+	ParallelSteps          bool   `toml:"parallel_steps"`
 }
 
 // PlannerConfig holds planner settings.
