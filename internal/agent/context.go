@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -53,14 +54,21 @@ func assembleContext(
 		tokenBudgetForSkills := skillCfg.MaxContextTokens
 		usedTokens := 0
 		for _, sk := range matched {
+			var content string
+			if len(sk.Summary) > 0 {
+				content = fmt.Sprintf("[Skill: %s] %s\nUse read_skill(\"%s\") for full docs.",
+					sk.Name, sk.Summary, sk.Name)
+			} else {
+				content = sk.Content
+			}
 			// Rough estimate: 1 token ~= 4 chars.
-			tokens := len(sk.Content) / 4
+			tokens := len(content) / 4
 			if tokenBudgetForSkills > 0 && usedTokens+tokens > tokenBudgetForSkills {
 				break
 			}
 			ranked = append(ranked, budget.ContextCandidate{
 				Role:     "skill",
-				Content:  sk.Content,
+				Content:  content,
 				Priority: float32(skillCfg.Priority),
 				Recency:  time.Now(),
 				Tokens:   tokens,

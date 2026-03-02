@@ -22,6 +22,7 @@ type GeneratedMeta struct {
 type Skill struct {
 	Name          string
 	Description   string
+	Summary       string            // Short description (< 100 tokens) for context injection
 	Version       string
 	Triggers      []string
 	Requires      SkillRequirements

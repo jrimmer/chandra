@@ -2,6 +2,17 @@ package skills
 
 import "testing"
 
+func TestSkill_HasSummary(t *testing.T) {
+	s := Skill{
+		Name:    "github",
+		Summary: "GitHub operations via gh CLI. Manage issues, PRs, repos.",
+		Content: "# Full content here...",
+	}
+	if s.Summary == "" {
+		t.Error("expected summary to be set")
+	}
+}
+
 func TestSkillRequirements_Empty(t *testing.T) {
 	req := SkillRequirements{}
 	if len(req.Bins) != 0 || len(req.Tools) != 0 || len(req.Env) != 0 {

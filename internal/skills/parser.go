@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -39,9 +40,12 @@ func ParseSkillMD(data []byte, path string) (Skill, error) {
 		return Skill{}, fmt.Errorf("parse %s: name is required", path)
 	}
 
+	summary := extractSummary(string(body))
+
 	return Skill{
 		Name:          meta.Name,
 		Description:   meta.Description,
+		Summary:       summary,
 		Version:       meta.Version,
 		Triggers:      meta.Triggers,
 		Requires:      meta.Requires,
@@ -52,6 +56,41 @@ func ParseSkillMD(data []byte, path string) (Skill, error) {
 		RequiresShell: meta.RequiresShell,
 		Generated:     meta.Generated,
 	}, nil
+}
+
+// extractSummary returns the first sentence from the body content.
+// It strips markdown headers and returns up to the first period-space
+// or period-newline boundary.
+func extractSummary(body string) string {
+	// Skip blank lines and markdown headers at the start.
+	lines := strings.Split(body, "\n")
+	var text string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		text = trimmed
+		break
+	}
+	if text == "" {
+		return ""
+	}
+	// Find the first sentence boundary.
+	for i, r := range text {
+		if r == '.' && i+1 < len(text) {
+			next := text[i+1]
+			if next == ' ' || next == '\n' || next == '\r' {
+				return text[:i+1]
+			}
+		}
+	}
+	// If no sentence boundary, check for trailing period.
+	if strings.HasSuffix(text, ".") {
+		return text
+	}
+	// Return the whole first line if no period found.
+	return text
 }
 
 // splitFrontmatter separates YAML frontmatter from the markdown body.
