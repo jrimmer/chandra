@@ -121,8 +121,11 @@ type PlansConfig struct {
 // PlannerConfig holds planner settings (populated in Phase 3).
 type PlannerConfig struct{}
 
-// InfrastructureConfig holds infrastructure awareness settings (populated in Phase 4).
-type InfrastructureConfig struct{}
+// InfrastructureConfig holds infrastructure awareness settings.
+type InfrastructureConfig struct {
+	DiscoveryInterval  string `toml:"discovery_interval"`
+	MaxConcurrentHosts int    `toml:"max_concurrent_hosts"`
+}
 
 // Config is the top-level configuration struct.
 type Config struct {

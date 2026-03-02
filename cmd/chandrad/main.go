@@ -25,6 +25,7 @@ import (
 	"github.com/jrimmer/chandra/internal/config"
 	"github.com/jrimmer/chandra/internal/events"
 	mqttbridge "github.com/jrimmer/chandra/internal/events/mqtt"
+	"github.com/jrimmer/chandra/internal/infra"
 	"github.com/jrimmer/chandra/internal/memory"
 	"github.com/jrimmer/chandra/internal/memory/episodic"
 	"github.com/jrimmer/chandra/internal/memory/identity"
@@ -211,6 +212,15 @@ func run(ctx context.Context, safeMode bool) error {
 	if err := registry.Register(skills.NewReadSkillTool(skillReg)); err != nil {
 		slog.Warn("chandrad: register read_skill failed", "err", err)
 	}
+
+	// -------------------------------------------------------------------
+	// Step 5c: Initialize infrastructure manager.
+	// -------------------------------------------------------------------
+	infraMgr := infra.NewManager()
+	if cfg.Infrastructure.MaxConcurrentHosts > 0 {
+		infraMgr.MaxConcurrentHosts = cfg.Infrastructure.MaxConcurrentHosts
+	}
+	slog.Info("chandrad: infrastructure manager initialized")
 
 	// -------------------------------------------------------------------
 	// Step 6: Initialize chat provider.
@@ -438,7 +448,7 @@ func run(ctx context.Context, safeMode bool) error {
 	defer daemonCancel()
 	cancelDaemon = daemonCancel
 
-	registerHandlers(apiServer, cancelDaemon, startTime, mem, inStore, registry, alog, confirmGate, db, agentLoop, sessionMgr, discordChannel, discordConfigured, skillReg)
+	registerHandlers(apiServer, cancelDaemon, startTime, mem, inStore, registry, alog, confirmGate, db, agentLoop, sessionMgr, discordChannel, discordConfigured, skillReg, infraMgr)
 
 	socketPath := resolveSocketPath()
 	if err := apiServer.Start(socketPath); err != nil {
@@ -631,6 +641,7 @@ func registerHandlers(
 	discordChannel channels.Channel,
 	discordConfigured bool,
 	skillReg *skills.Registry,
+	infraMgr *infra.Manager,
 ) {
 	_ = agentLoop // reserved for future use
 
@@ -994,6 +1005,48 @@ func registerHandlers(
 			return nil, fmt.Errorf("confirm.approve: %w", err)
 		}
 		return map[string]any{"ok": true}, nil
+	})
+
+	// infra.list — returns all hosts and services with credentials masked.
+	srv.Handle("infra.list", func(ctx context.Context, _ json.RawMessage) (any, error) {
+		state := infraMgr.GetState()
+		// Mask credentials in host access methods.
+		for i := range state.Hosts {
+			state.Hosts[i].Access.Credentials = infra.MaskCredential(state.Hosts[i].Access.Credentials)
+		}
+		return map[string]any{
+			"hosts":    state.Hosts,
+			"services": state.Services,
+		}, nil
+	})
+
+	// infra.show — params: {host_id string, reveal bool}
+	srv.Handle("infra.show", func(ctx context.Context, params json.RawMessage) (any, error) {
+		var req struct {
+			HostID string `json:"host_id"`
+			Reveal bool   `json:"reveal"`
+		}
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, fmt.Errorf("infra.show: invalid params: %w", err)
+		}
+		host, ok := infraMgr.GetHost(req.HostID)
+		if !ok {
+			return nil, fmt.Errorf("infra.show: host %q not found", req.HostID)
+		}
+		if !req.Reveal {
+			host.Access.Credentials = infra.MaskCredential(host.Access.Credentials)
+		}
+		status := infraMgr.HostStatus(req.HostID)
+		return map[string]any{
+			"host":   host,
+			"status": status,
+		}, nil
+	})
+
+	// infra.discover — triggers an infrastructure discovery scan.
+	srv.Handle("infra.discover", func(ctx context.Context, _ json.RawMessage) (any, error) {
+		err := infraMgr.Discover(ctx)
+		return map[string]any{"discovered": true}, err
 	})
 }
 

@@ -265,6 +265,39 @@ var planCancelCmd = &cobra.Command{
 	},
 }
 
+// ---- infra commands ---------------------------------------------------------
+
+var infraCmd = &cobra.Command{
+	Use:   "infra",
+	Short: "Infrastructure operations",
+}
+
+var infraListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List all hosts and services",
+	Run: func(cmd *cobra.Command, args []string) {
+		call("infra.list", nil)
+	},
+}
+
+var infraShowCmd = &cobra.Command{
+	Use:   "show <host-id>",
+	Short: "Show host details",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		reveal, _ := cmd.Flags().GetBool("reveal")
+		call("infra.show", map[string]any{"host_id": args[0], "reveal": reveal})
+	},
+}
+
+var infraDiscoverCmd = &cobra.Command{
+	Use:   "discover",
+	Short: "Run infrastructure discovery scan",
+	Run: func(cmd *cobra.Command, args []string) {
+		call("infra.discover", nil)
+	},
+}
+
 // ---- log command ------------------------------------------------------------
 
 // logFlags holds the parsed flags for the log command.
@@ -336,6 +369,11 @@ func init() {
 	planExtendCmd.Flags().String("duration", "24h", "extension duration")
 	planCmd.AddCommand(planListCmd, planShowCmd, planExtendCmd, planDryRunCmd, planCancelCmd)
 	rootCmd.AddCommand(planCmd)
+
+	// Infra subcommands.
+	infraShowCmd.Flags().Bool("reveal", false, "reveal masked credentials")
+	infraCmd.AddCommand(infraListCmd, infraShowCmd, infraDiscoverCmd)
+	rootCmd.AddCommand(infraCmd)
 
 	// Log flags.
 	logCmd.Flags().BoolVar(&logFlags.today, "today", false, "show today's log")
