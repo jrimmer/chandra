@@ -166,6 +166,8 @@ func run(ctx context.Context, safeMode bool) error {
 		slog.Warn("chandrad: register web.search failed", "err", err)
 	}
 
+	// read_skill is registered after skillReg is initialized (Step 5b below).
+
 	toolTimeout := 30 * time.Second
 	if cfg.Tools.DefaultToolTimeout != "" {
 		if d, err := time.ParseDuration(cfg.Tools.DefaultToolTimeout); err == nil {
@@ -203,6 +205,11 @@ func run(ctx context.Context, safeMode bool) error {
 		slog.Warn("chandrad: skills load failed", "err", err)
 	} else {
 		slog.Info("chandrad: skills loaded", "loaded", len(skillReg.All()), "unmet", len(skillReg.Unmet()))
+	}
+
+	// Register the read_skill built-in tool.
+	if err := registry.Register(skills.NewReadSkillTool(skillReg)); err != nil {
+		slog.Warn("chandrad: register read_skill failed", "err", err)
 	}
 
 	// -------------------------------------------------------------------
