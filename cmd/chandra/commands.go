@@ -204,6 +204,67 @@ var skillRejectCmd = &cobra.Command{
 	},
 }
 
+// ---- plan commands ----------------------------------------------------------
+
+var planCmd = &cobra.Command{
+	Use:   "plan",
+	Short: "Plan execution operations",
+}
+
+var planListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List execution plans",
+	Run: func(cmd *cobra.Command, args []string) {
+		status, _ := cmd.Flags().GetString("status")
+		params := map[string]string{}
+		if status != "" {
+			params["status"] = status
+		}
+		call("plan.list", params)
+	},
+}
+
+var planShowCmd = &cobra.Command{
+	Use:   "show <id>",
+	Short: "Show plan details with tree-formatted steps",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		call("plan.show", map[string]string{"id": args[0]})
+	},
+}
+
+var planExtendCmd = &cobra.Command{
+	Use:   "extend <id>",
+	Short: "Extend a paused plan's checkpoint timeout",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		duration, _ := cmd.Flags().GetString("duration")
+		params := map[string]string{"id": args[0]}
+		if duration != "" {
+			params["duration"] = duration
+		}
+		call("plan.extend", params)
+	},
+}
+
+var planDryRunCmd = &cobra.Command{
+	Use:   "dry-run <goal>",
+	Short: "Decompose a goal into a plan without executing",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		call("plan.dry_run", map[string]string{"goal": args[0]})
+	},
+}
+
+var planCancelCmd = &cobra.Command{
+	Use:   "cancel <id>",
+	Short: "Cancel a running or paused plan",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		call("plan.cancel", map[string]string{"id": args[0]})
+	},
+}
+
 // ---- log command ------------------------------------------------------------
 
 // logFlags holds the parsed flags for the log command.
@@ -269,6 +330,12 @@ func init() {
 	// Skill subcommands.
 	skillCmd.AddCommand(skillListCmd, skillShowCmd, skillReloadCmd, skillPendingCmd, skillApproveCmd, skillRejectCmd)
 	rootCmd.AddCommand(skillCmd)
+
+	// Plan subcommands.
+	planListCmd.Flags().String("status", "", "filter by plan status")
+	planExtendCmd.Flags().String("duration", "24h", "extension duration")
+	planCmd.AddCommand(planListCmd, planShowCmd, planExtendCmd, planDryRunCmd, planCancelCmd)
+	rootCmd.AddCommand(planCmd)
 
 	// Log flags.
 	logCmd.Flags().BoolVar(&logFlags.today, "today", false, "show today's log")
