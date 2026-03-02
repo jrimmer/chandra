@@ -935,6 +935,47 @@ func registerHandlers(
 		}, nil
 	})
 
+	// skill.pending
+	srv.Handle("skill.pending", func(ctx context.Context, _ json.RawMessage) (any, error) {
+		return map[string]any{"pending": skillReg.PendingReview()}, nil
+	})
+
+	// skill.approve — params: {name string, reviewer string}
+	srv.Handle("skill.approve", func(ctx context.Context, params json.RawMessage) (any, error) {
+		var req struct {
+			Name     string `json:"name"`
+			Reviewer string `json:"reviewer"`
+		}
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, fmt.Errorf("skill.approve: invalid params: %w", err)
+		}
+		if req.Reviewer == "" {
+			req.Reviewer = "cli"
+		}
+		if err := skillReg.Approve(req.Name, req.Reviewer); err != nil {
+			return nil, err
+		}
+		return map[string]string{"status": "approved", "skill": req.Name}, nil
+	})
+
+	// skill.reject — params: {name string, reviewer string}
+	srv.Handle("skill.reject", func(ctx context.Context, params json.RawMessage) (any, error) {
+		var req struct {
+			Name     string `json:"name"`
+			Reviewer string `json:"reviewer"`
+		}
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, fmt.Errorf("skill.reject: invalid params: %w", err)
+		}
+		if req.Reviewer == "" {
+			req.Reviewer = "cli"
+		}
+		if err := skillReg.Reject(req.Name, req.Reviewer); err != nil {
+			return nil, err
+		}
+		return map[string]string{"status": "rejected", "skill": req.Name}, nil
+	})
+
 	// confirm.approve — params: {id string}
 	srv.Handle("confirm.approve", func(ctx context.Context, params json.RawMessage) (any, error) {
 		if confirmGate == nil {

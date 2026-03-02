@@ -178,6 +178,32 @@ var skillReloadCmd = &cobra.Command{
 	},
 }
 
+var skillPendingCmd = &cobra.Command{
+	Use:   "pending",
+	Short: "List skills pending review",
+	Run: func(cmd *cobra.Command, args []string) {
+		call("skill.pending", nil)
+	},
+}
+
+var skillApproveCmd = &cobra.Command{
+	Use:   "approve <name>",
+	Short: "Approve a generated skill",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		call("skill.approve", map[string]string{"name": args[0]})
+	},
+}
+
+var skillRejectCmd = &cobra.Command{
+	Use:   "reject <name>",
+	Short: "Reject a generated skill",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		call("skill.reject", map[string]string{"name": args[0]})
+	},
+}
+
 // ---- log command ------------------------------------------------------------
 
 // logFlags holds the parsed flags for the log command.
@@ -241,7 +267,7 @@ func init() {
 	rootCmd.AddCommand(toolCmd)
 
 	// Skill subcommands.
-	skillCmd.AddCommand(skillListCmd, skillShowCmd, skillReloadCmd)
+	skillCmd.AddCommand(skillListCmd, skillShowCmd, skillReloadCmd, skillPendingCmd, skillApproveCmd, skillRejectCmd)
 	rootCmd.AddCommand(skillCmd)
 
 	// Log flags.
