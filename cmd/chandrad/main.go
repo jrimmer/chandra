@@ -35,6 +35,7 @@ import (
 	"github.com/jrimmer/chandra/internal/provider/embeddings"
 	"github.com/jrimmer/chandra/internal/provider/openai"
 	"github.com/jrimmer/chandra/internal/scheduler"
+	"github.com/jrimmer/chandra/internal/skills"
 	"github.com/jrimmer/chandra/internal/tools"
 	"github.com/jrimmer/chandra/internal/tools/confirm"
 	"github.com/jrimmer/chandra/pkg"
@@ -194,6 +195,17 @@ func run(ctx context.Context, safeMode bool) error {
 	slog.Info("chandrad: tools initialized")
 
 	// -------------------------------------------------------------------
+	// Step 5b: Initialize skill registry.
+	// -------------------------------------------------------------------
+	skillReg := skills.NewRegistry()
+	expandedSkillDir := expandPath(cfg.Skills.Directory)
+	if err := skillReg.Load(ctx, expandedSkillDir, registeredToolNames(registry)); err != nil {
+		slog.Warn("chandrad: skills load failed", "err", err)
+	} else {
+		slog.Info("chandrad: skills loaded", "loaded", len(skillReg.All()), "unmet", len(skillReg.Unmet()))
+	}
+
+	// -------------------------------------------------------------------
 	// Step 6: Initialize chat provider.
 	// -------------------------------------------------------------------
 	var chatProvider provider.Provider
@@ -321,15 +333,19 @@ func run(ctx context.Context, safeMode bool) error {
 	var agentLoop agent.AgentLoop
 	if chatProvider != nil {
 		loopCfg := agent.LoopConfig{
-			Provider:  chatProvider,
-			Memory:    mem,
-			Budget:    budgetMgr,
-			Registry:  registry,
-			Executor:  executor,
-			ActionLog: alog,
-			Channel:   discordChannel, // G18: wire Discord channel for response sending
-			Sessions:  sessionMgr,     // required for RunScheduled to process turns
-			MaxRounds: cfg.Agent.MaxToolRounds,
+			Provider:       chatProvider,
+			Memory:         mem,
+			Budget:         budgetMgr,
+			Registry:       registry,
+			Executor:       executor,
+			ActionLog:      alog,
+			Channel:        discordChannel, // G18: wire Discord channel for response sending
+			Sessions:       sessionMgr,     // required for RunScheduled to process turns
+			MaxRounds:      cfg.Agent.MaxToolRounds,
+			SkillRegistry:  skillReg,
+			SkillPriority:  cfg.Skills.Priority,
+			SkillMaxTokens: cfg.Skills.MaxContextTokens,
+			SkillMaxMatch:  cfg.Skills.MaxMatches,
 		}
 		agentLoop = agent.NewLoop(loopCfg)
 		slog.Info("chandrad: agent loop initialized")
@@ -415,7 +431,7 @@ func run(ctx context.Context, safeMode bool) error {
 	defer daemonCancel()
 	cancelDaemon = daemonCancel
 
-	registerHandlers(apiServer, cancelDaemon, startTime, mem, inStore, registry, alog, confirmGate, db, agentLoop, sessionMgr, discordChannel, discordConfigured)
+	registerHandlers(apiServer, cancelDaemon, startTime, mem, inStore, registry, alog, confirmGate, db, agentLoop, sessionMgr, discordChannel, discordConfigured, skillReg)
 
 	socketPath := resolveSocketPath()
 	if err := apiServer.Start(socketPath); err != nil {
@@ -607,6 +623,7 @@ func registerHandlers(
 	sessionMgr agent.Manager,
 	discordChannel channels.Channel,
 	discordConfigured bool,
+	skillReg *skills.Registry,
 ) {
 	_ = agentLoop // reserved for future use
 
@@ -861,6 +878,56 @@ func registerHandlers(
 		return entry, nil
 	})
 
+	// skill.list
+	srv.Handle("skill.list", func(ctx context.Context, _ json.RawMessage) (any, error) {
+		type skillSummary struct {
+			Name        string   `json:"name"`
+			Description string   `json:"description"`
+			Version     string   `json:"version"`
+			Triggers    []string `json:"triggers"`
+		}
+		all := skillReg.All()
+		summaries := make([]skillSummary, len(all))
+		for i, s := range all {
+			summaries[i] = skillSummary{
+				Name:        s.Name,
+				Description: s.Description,
+				Version:     s.Version,
+				Triggers:    s.Triggers,
+			}
+		}
+		return map[string]any{
+			"skills": summaries,
+			"unmet":  skillReg.Unmet(),
+		}, nil
+	})
+
+	// skill.show — params: {name string}
+	srv.Handle("skill.show", func(ctx context.Context, params json.RawMessage) (any, error) {
+		var req struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, fmt.Errorf("skill.show: invalid params: %w", err)
+		}
+		skill, ok := skillReg.Get(req.Name)
+		if !ok {
+			return nil, fmt.Errorf("skill not found: %s", req.Name)
+		}
+		return skill, nil
+	})
+
+	// skill.reload
+	srv.Handle("skill.reload", func(ctx context.Context, _ json.RawMessage) (any, error) {
+		if err := skillReg.Reload(ctx); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"reloaded": len(skillReg.All()),
+			"unmet":    len(skillReg.Unmet()),
+		}, nil
+	})
+
 	// confirm.approve — params: {id string}
 	srv.Handle("confirm.approve", func(ctx context.Context, params json.RawMessage) (any, error) {
 		if confirmGate == nil {
@@ -916,4 +983,25 @@ func (n *noopSemanticStore) Query(_ context.Context, _ []float32, _ int) ([]pkg.
 }
 func (n *noopSemanticStore) QueryText(_ context.Context, _ string, _ int) ([]pkg.MemoryEntry, error) {
 	return nil, nil
+}
+
+// expandPath expands ~ to the user's home directory.
+func expandPath(path string) string {
+	if len(path) > 0 && path[0] == '~' {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return filepath.Join(home, path[1:])
+		}
+	}
+	return path
+}
+
+// registeredToolNames returns a map of registered tool names for skill validation.
+func registeredToolNames(reg tools.Registry) map[string]bool {
+	defs := reg.All()
+	names := make(map[string]bool, len(defs))
+	for _, d := range defs {
+		names[d.Name] = true
+	}
+	return names
 }
