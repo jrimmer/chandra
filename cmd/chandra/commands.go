@@ -978,15 +978,15 @@ allowed_roles = []       # Discord role IDs (access_policy = "role" only)
 
 [scheduler]
 enabled = true
-heartbeat_interval = "5m"
+tick_interval = "60s"
 
 [mqtt]
 mode = "embedded"        # embedded | external | disabled
 bind = "127.0.0.1:1883"
 
 [tools]
-max_concurrent = 5
-max_rounds = 10
+confirmation_timeout = "30s"
+default_tool_timeout = "60s"
 
 # Exec tool — SECURITY: tighten before enabling in production.
 [tools.exec]
@@ -995,7 +995,7 @@ working_directory = "~"
 timeout = "5m"
 
 [skills]
-directory = "~/.config/chandra/skills"
+path = "~/.config/chandra/skills"
 priority = 0.7
 max_context_tokens = 2000
 max_matches = 3
