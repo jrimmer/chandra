@@ -44,6 +44,25 @@ var rootCmd = &cobra.Command{
 	Use:   "chandra",
 	Short: "Chandra AI agent CLI",
 	Long:  "chandra is the command-line interface for the Chandra AI agent daemon (chandrad).",
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		// Skip first-run check for commands that don't need config.
+		switch cmd.Name() {
+		case "init", "help", "version":
+			return
+		}
+		// If running a daemon command (start, stop, status, health), skip.
+		// Those connect to a running daemon, not the config.
+		switch cmd.Name() {
+		case "start", "stop", "status", "health":
+			return
+		}
+		cfgPath := resolveDefaultConfigPath()
+		if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "\nNo configuration found at %s\n\n", cfgPath)
+			fmt.Fprintln(os.Stderr, "Run 'chandra init' to set up Chandra, or see 'chandra --help'.")
+			os.Exit(1)
+		}
+	},
 }
 
 // ---- daemon commands --------------------------------------------------------
