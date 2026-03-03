@@ -2,13 +2,20 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/jrimmer/chandra/internal/api"
+	"github.com/jrimmer/chandra/internal/channels/discord"
+	"github.com/jrimmer/chandra/internal/config"
+	"github.com/jrimmer/chandra/internal/doctor"
+	_ "github.com/mattn/go-sqlite3" // register sqlite3 driver
 )
 
 // call is a helper that creates an api.Client, calls the given method with
@@ -389,6 +396,193 @@ var confirmCmd = &cobra.Command{
 	},
 }
 
+// ---- provider commands -------------------------------------------------------
+
+var providerCmd = &cobra.Command{
+	Use:   "provider",
+	Short: "Provider operations",
+}
+
+var providerTestVerbose bool
+
+var providerTestCmd = &cobra.Command{
+	Use:   "test",
+	Short: "Test provider connection and API key",
+	Run: func(cmd *cobra.Command, args []string) {
+		cfgPath := resolveDefaultConfigPath()
+		cfg, err := config.Load(cfgPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: load config: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("Testing %s connection (%s)...\n", cfg.Provider.Type, cfg.Provider.BaseURL)
+		check := doctor.NewProviderCheck(&cfg.Provider)
+		result := check.Run(cmd.Context())
+
+		if result.Status == doctor.Pass {
+			fmt.Printf("✓ %s\n", result.Detail)
+		} else {
+			fmt.Printf("✗ %s\n", result.Detail)
+			if result.Fix != "" {
+				fmt.Printf("  Fix: %s\n", result.Fix)
+			}
+			os.Exit(1)
+		}
+	},
+}
+
+// ---- channel commands -------------------------------------------------------
+
+var channelCmd = &cobra.Command{
+	Use:   "channel",
+	Short: "Channel operations",
+}
+
+var channelTestCmd = &cobra.Command{
+	Use:   "test [channel]",
+	Short: "Send a Hello World loop test to a channel",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		if args[0] != "discord" {
+			fmt.Fprintf(os.Stderr, "error: only 'discord' is supported\n")
+			os.Exit(1)
+		}
+
+		cfgPath := resolveDefaultConfigPath()
+		cfg, err := config.Load(cfgPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: load config: %v\n", err)
+			os.Exit(1)
+		}
+
+		if cfg.Channels.Discord == nil || cfg.Channels.Discord.BotToken == "" {
+			fmt.Fprintf(os.Stderr, "error: discord not configured (channels.discord.bot_token is empty)\n")
+			os.Exit(1)
+		}
+
+		if len(cfg.Channels.Discord.ChannelIDs) == 0 {
+			fmt.Fprintf(os.Stderr, "error: no channel IDs configured (channels.discord.channel_ids)\n")
+			os.Exit(1)
+		}
+
+		channelID := cfg.Channels.Discord.ChannelIDs[0]
+		fmt.Printf("Sending verification message to channel %s...\n", channelID)
+		fmt.Println("Waiting for your reply (2 min timeout)...")
+
+		opts := discord.DefaultVerifyOptions()
+		result, err := discord.RunLoopTest(cmd.Context(), cfg.Channels.Discord.BotToken, channelID, opts)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "✗ Loop test failed: %v\n", err)
+			fmt.Fprintln(os.Stderr, "  Config saved but channel loop is unverified.")
+			os.Exit(1)
+		}
+
+		fmt.Printf("✓ Reply received from %s (id: %s)\n", result.ReplyUsername, result.ReplyUserID)
+		fmt.Println("  Full loop confirmed — inbound and outbound working.")
+
+		// Write verification timestamp to DB.
+		dbPath := cfg.Database.Path
+		if dbPath == "" {
+			home, _ := os.UserHomeDir()
+			dbPath = filepath.Join(home, ".config", "chandra", "chandra.db")
+		}
+		if err := persistVerification(dbPath, channelID, result.ReplyUserID); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not persist verification: %v\n", err)
+		}
+	},
+}
+
+// persistVerification writes the loop test result to the channel_verifications table.
+func persistVerification(dbPath, channelID, userID string) error {
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	_, err = db.Exec(
+		`INSERT OR REPLACE INTO channel_verifications (channel_id, verified_at, verified_user_id) VALUES (?, ?, ?)`,
+		channelID, time.Now().Unix(), userID,
+	)
+	return err
+}
+
+// ---- doctor command ----------------------------------------------------------
+
+var doctorCmd = &cobra.Command{
+	Use:   "doctor",
+	Short: "Verify the entire Chandra stack",
+	Run: func(cmd *cobra.Command, args []string) {
+		cfgPath := resolveDefaultConfigPath()
+		cfgDir := filepath.Dir(cfgPath)
+
+		// Load config (may fail — that's ok, config check handles it)
+		cfg, cfgErr := config.Load(cfgPath)
+
+		var dbPath string
+		if cfgErr == nil && cfg.Database.Path != "" {
+			dbPath = cfg.Database.Path
+		} else {
+			home, _ := os.UserHomeDir()
+			dbPath = filepath.Join(home, ".config", "chandra", "chandra.db")
+		}
+
+		checks := []doctor.Check{
+			doctor.NewConfigCheck(cfgPath),
+			doctor.NewPermissionsCheck(cfgDir, cfgPath),
+			doctor.NewDBCheck(dbPath),
+		}
+
+		if cfgErr == nil {
+			checks = append(checks, doctor.NewProviderCheck(&cfg.Provider))
+			checks = append(checks, doctor.NewAllowlistCheck(cfg, dbPath))
+			if cfg.Channels.Discord != nil && cfg.Channels.Discord.BotToken != "" {
+				// One ChannelVerifiedCheck per configured Discord channel ID.
+				for _, chID := range cfg.Channels.Discord.ChannelIDs {
+					checks = append(checks, doctor.NewChannelVerifiedCheck(chID, dbPath))
+				}
+			}
+			checks = append(checks, doctor.NewSchedulerCheck(""))
+			checks = append(checks, doctor.NewDaemonCheck(""))
+		}
+
+		fmt.Println("Chandra Doctor — Stack Verification")
+		fmt.Println("────────────────────────────────────")
+		fmt.Println()
+
+		results := doctor.RunAll(cmd.Context(), checks, 10)
+
+		for _, r := range results {
+			switch r.Status {
+			case doctor.Pass:
+				fmt.Printf("  %-14s ✓ %s\n", r.Name, r.Detail)
+			case doctor.Warn:
+				fmt.Printf("  %-14s ⚠ %s\n", r.Name, r.Detail)
+				if r.Fix != "" {
+					fmt.Printf("  %-14s   %s\n", "", r.Fix)
+				}
+			case doctor.Fail:
+				fmt.Printf("  %-14s ✗ %s\n", r.Name, r.Detail)
+				if r.Fix != "" {
+					fmt.Printf("  %-14s   %s\n", "", r.Fix)
+				}
+			}
+		}
+
+		fmt.Println()
+		if doctor.AnyFailed(results) {
+			fmt.Println("One or more checks failed. See above for remediation.")
+			os.Exit(1)
+		}
+		if doctor.AnyWarned(results) {
+			fmt.Println("Checks completed with warnings. Review the items above.")
+			return
+		}
+		fmt.Println("All checks passed. Chandra is healthy.")
+	},
+}
+
 // init registers all subcommands on rootCmd and wires up flags.
 func init() {
 	// Daemon commands.
@@ -432,4 +626,26 @@ func init() {
 
 	// Confirm command.
 	rootCmd.AddCommand(confirmCmd)
+
+	// Provider subcommands.
+	providerTestCmd.Flags().BoolVarP(&providerTestVerbose, "verbose", "v", false, "show request/response detail")
+	providerCmd.AddCommand(providerTestCmd)
+	rootCmd.AddCommand(providerCmd)
+
+	// Channel subcommands.
+	channelCmd.AddCommand(channelTestCmd)
+	rootCmd.AddCommand(channelCmd)
+
+	// Doctor command.
+	rootCmd.AddCommand(doctorCmd)
+}
+
+// resolveDefaultConfigPath returns the default config file path, respecting
+// CHANDRA_CONFIG env var if set.
+func resolveDefaultConfigPath() string {
+	if envPath := os.Getenv("CHANDRA_CONFIG"); envPath != "" {
+		return envPath
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "chandra", "config.toml")
 }
