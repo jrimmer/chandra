@@ -221,7 +221,19 @@ func TestConfig_InfrastructureCacheTTL(t *testing.T) {
 	}
 }
 
-func TestLoad_MissingChannel(t *testing.T) {
+func TestValidate_NoChannelsAllowed(t *testing.T) {
+	cfg := &Config{
+		Identity: IdentityConfig{Name: "Chandra", Description: "helpful"},
+		Provider: ProviderConfig{BaseURL: "https://api.openai.com/v1", DefaultModel: "gpt-4o", Type: "openai"},
+		Database: DatabaseConfig{Path: "/tmp/test.db"},
+	}
+	err := validate(cfg)
+	if err != nil {
+		t.Fatalf("expected no error when no channels configured, got: %v", err)
+	}
+}
+
+func TestLoad_NoChannelAllowed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	err := os.WriteFile(path, []byte(`
 [identity]
@@ -240,5 +252,5 @@ path = "/tmp/test.db"
 	require.NoError(t, err)
 
 	_, err = Load(path)
-	assert.Error(t, err, "should fail when no channel configured")
+	assert.NoError(t, err, "should pass when no channel configured (CLI-only mode)")
 }

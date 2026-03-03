@@ -339,11 +339,6 @@ func validate(cfg *Config) error {
 		errs = append(errs, "database.path is required")
 	}
 
-	// At least one channel must be configured.
-	if cfg.Channels.Discord == nil || cfg.Channels.Discord.BotToken == "" {
-		errs = append(errs, "at least one channel must be configured (channels.discord)")
-	}
-
 	switch cfg.MQTT.Mode {
 	case "embedded", "external", "disabled":
 		// valid
