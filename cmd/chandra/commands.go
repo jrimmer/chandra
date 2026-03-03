@@ -52,7 +52,7 @@ var rootCmd = &cobra.Command{
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		// Skip first-run check for commands that don't need config.
 		switch cmd.Name() {
-		case "init", "help", "version":
+		case "init", "help", "version", "schema":
 			return
 		}
 		// If running a daemon command (start, stop, status, health), skip.
