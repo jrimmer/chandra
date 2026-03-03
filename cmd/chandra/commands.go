@@ -873,6 +873,7 @@ var accessListCmd = &cobra.Command{
 // ---- init command ------------------------------------------------------------
 
 var initNonInteractive bool
+var initConfigPath string
 
 var initCmd = &cobra.Command{
 	Use:   "init",
@@ -882,7 +883,11 @@ var initCmd = &cobra.Command{
 		opts := setup.DefaultOptions()
 		opts.NonInteractive = initNonInteractive
 
-		if envPath := os.Getenv("CHANDRA_CONFIG"); envPath != "" {
+		// --config flag takes highest precedence, then CHANDRA_CONFIG env var,
+		// then the default path set by DefaultOptions.
+		if initConfigPath != "" {
+			opts.ConfigPath = initConfigPath
+		} else if envPath := os.Getenv("CHANDRA_CONFIG"); envPath != "" {
 			opts.ConfigPath = envPath
 		}
 
@@ -1068,6 +1073,7 @@ func init() {
 
 	// Init command.
 	initCmd.Flags().BoolVar(&initNonInteractive, "non-interactive", false, "skip interactive prompts")
+	initCmd.Flags().StringVar(&initConfigPath, "config", "", "path to write config (default: ~/.config/chandra/config.toml)")
 	rootCmd.AddCommand(initCmd)
 
 	// Config subcommands.
