@@ -104,8 +104,7 @@ func run(ctx context.Context, safeMode bool) error {
 	// -------------------------------------------------------------------
 	if !safeMode {
 		if err := verifyPermissions(cfgDir, cfgPath); err != nil {
-			slog.Warn("chandrad: permission check failed", "err", err)
-			// Non-fatal: warn but continue.
+			return fmt.Errorf("chandrad: permission check failed: %w (fix with: chmod 0700 %s && chmod 0600 %s)", err, cfgDir, cfgPath)
 		}
 	}
 
