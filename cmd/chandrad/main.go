@@ -600,13 +600,15 @@ func defaultConfig() *config.Config {
 
 // resolveConfigPath determines the config directory and file path.
 func resolveConfigPath() (dir, cfgPath string) {
+	if envPath := os.Getenv("CHANDRA_CONFIG"); envPath != "" {
+		return filepath.Dir(envPath), envPath
+	}
 	home, err := os.UserHomeDir()
 	if err == nil {
 		dir = filepath.Join(home, ".config", "chandra")
 		cfgPath = filepath.Join(dir, "config.toml")
 		return dir, cfgPath
 	}
-	// Fallback to working directory.
 	wd, _ := os.Getwd()
 	return wd, filepath.Join(wd, "chandra.toml")
 }
