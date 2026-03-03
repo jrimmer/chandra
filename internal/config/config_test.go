@@ -254,3 +254,32 @@ path = "/tmp/test.db"
 	_, err = Load(path)
 	assert.NoError(t, err, "should pass when no channel configured (CLI-only mode)")
 }
+
+func TestDiscordConfig_AccessControlFields(t *testing.T) {
+	tomlData := `
+[channels.discord]
+enabled = true
+bot_token = "Bot abc123"
+channel_ids = ["12345"]
+access_policy = "invite"
+allowed_users = ["111222333"]
+allowed_guilds = ["444555666"]
+allowed_roles = ["777888999"]
+`
+	var cfg Config
+	if _, err := toml.Decode(tomlData, &cfg); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !cfg.Channels.Discord.Enabled {
+		t.Error("expected enabled=true")
+	}
+	if cfg.Channels.Discord.BotToken != "Bot abc123" {
+		t.Errorf("expected bot_token=Bot abc123, got %q", cfg.Channels.Discord.BotToken)
+	}
+	if cfg.Channels.Discord.AccessPolicy != "invite" {
+		t.Errorf("expected access_policy=invite, got %q", cfg.Channels.Discord.AccessPolicy)
+	}
+	if len(cfg.Channels.Discord.AllowedUsers) != 1 || cfg.Channels.Discord.AllowedUsers[0] != "111222333" {
+		t.Errorf("unexpected allowed_users: %v", cfg.Channels.Discord.AllowedUsers)
+	}
+}
