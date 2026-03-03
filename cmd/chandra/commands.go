@@ -7,14 +7,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
 
+	"github.com/jrimmer/chandra/internal/access"
 	"github.com/jrimmer/chandra/internal/api"
 	"github.com/jrimmer/chandra/internal/channels/discord"
 	"github.com/jrimmer/chandra/internal/config"
 	"github.com/jrimmer/chandra/internal/doctor"
+	"github.com/jrimmer/chandra/internal/setup"
+	"github.com/jrimmer/chandra/store"
 	_ "github.com/mattn/go-sqlite3" // register sqlite3 driver
 )
 
@@ -602,6 +607,388 @@ var doctorCmd = &cobra.Command{
 	},
 }
 
+// ---- invite commands ---------------------------------------------------------
+
+var inviteCmd = &cobra.Command{
+	Use:   "invite",
+	Short: "Manage invite codes",
+}
+
+var inviteCreateCmd = &cobra.Command{
+	Use:   "create",
+	Short: "Create an invite code",
+	Run: func(cmd *cobra.Command, args []string) {
+		uses, _ := cmd.Flags().GetInt("uses")
+		ttlStr, _ := cmd.Flags().GetString("ttl")
+
+		var ttl time.Duration
+		if ttlStr != "" {
+			var err error
+			ttl, err = time.ParseDuration(ttlStr)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: invalid ttl %q: %v\n", ttlStr, err)
+				os.Exit(1)
+			}
+		}
+
+		db := openDB()
+		defer db.Close()
+		store := access.NewStore(db)
+
+		code, err := store.CreateInvite(cmd.Context(), uses, ttl)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("Code: %s\n", code.Code)
+		fmt.Printf("Uses: %d", code.UsesRemaining)
+		if !code.ExpiresAt.IsZero() {
+			fmt.Printf(" · Expires: %s", code.ExpiresAt.Format("2006-01-02"))
+		}
+		fmt.Println()
+	},
+}
+
+var inviteListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List active invite codes",
+	Run: func(cmd *cobra.Command, args []string) {
+		db := openDB()
+		defer db.Close()
+		store := access.NewStore(db)
+
+		codes, err := store.ListInvites(cmd.Context())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+
+		if len(codes) == 0 {
+			fmt.Println("No active invite codes.")
+			return
+		}
+
+		fmt.Printf("%-30s  %-5s  %s\n", "Code", "Uses", "Expires")
+		fmt.Println(strings.Repeat("─", 55))
+		for _, c := range codes {
+			exp := "never"
+			if !c.ExpiresAt.IsZero() {
+				exp = c.ExpiresAt.Format("2006-01-02")
+			}
+			fmt.Printf("%-30s  %-5d  %s\n", c.Code, c.UsesRemaining, exp)
+		}
+	},
+}
+
+var inviteRevokeCmd = &cobra.Command{
+	Use:   "revoke <code>",
+	Short: "Revoke an invite code",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		db := openDB()
+		defer db.Close()
+		store := access.NewStore(db)
+
+		if err := store.RevokeInvite(cmd.Context(), args[0]); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Revoked: %s\n", args[0])
+	},
+}
+
+// ---- access commands ---------------------------------------------------------
+//
+// User access (invite/request/allowlist policies) lives in the DB — managed here.
+// Role access (role policy) lives in the config file — managed with --role flag.
+
+var accessCmd = &cobra.Command{
+	Use:   "access",
+	Short: "Manage user and role access",
+}
+
+var accessAddRole bool // --role flag for add/remove
+
+var accessAddCmd = &cobra.Command{
+	Use:   "add <channel> <id>",
+	Short: "Add a user ID (or role ID with --role) to the access list",
+	Args:  cobra.ExactArgs(2),
+	Run: func(cmd *cobra.Command, args []string) {
+		if accessAddRole {
+			// Role IDs live in config (channels.discord.allowed_roles).
+			cfgPath := resolveDefaultConfigPath()
+			cfg, err := config.Load(cfgPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: load config: %v\n", err)
+				os.Exit(1)
+			}
+			if cfg.Channels.Discord == nil {
+				fmt.Fprintln(os.Stderr, "error: discord channel not configured")
+				os.Exit(1)
+			}
+			for _, existing := range cfg.Channels.Discord.AllowedRoles {
+				if existing == args[1] {
+					fmt.Printf("Role %s is already in allowed_roles\n", args[1])
+					return
+				}
+			}
+			cfg.Channels.Discord.AllowedRoles = append(cfg.Channels.Discord.AllowedRoles, args[1])
+			if err := saveConfig(cfg, cfgPath); err != nil {
+				fmt.Fprintf(os.Stderr, "error: save config: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("Added role %s to %s allowed_roles\n", args[1], args[0])
+			return
+		}
+		// User IDs live in the DB, keyed by real Discord channel ID (not adapter name).
+		channelIDs := resolveChannelIDs(args[0])
+		if len(channelIDs) == 0 {
+			fmt.Fprintf(os.Stderr, "error: no channel IDs configured for %q\n", args[0])
+			os.Exit(1)
+		}
+		db := openDB()
+		defer db.Close()
+		st := access.NewStore(db)
+		for _, chID := range channelIDs {
+			if err := st.AddUser(cmd.Context(), chID, args[1], "", "manual"); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+		}
+		fmt.Printf("Added %s to %s allowlist (%d channel(s))\n", args[1], args[0], len(channelIDs))
+	},
+}
+
+var accessRemoveCmd = &cobra.Command{
+	Use:   "remove <channel> <id>",
+	Short: "Remove a user ID (or role ID with --role) from the access list",
+	Args:  cobra.ExactArgs(2),
+	Run: func(cmd *cobra.Command, args []string) {
+		if accessAddRole {
+			cfgPath := resolveDefaultConfigPath()
+			cfg, err := config.Load(cfgPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: load config: %v\n", err)
+				os.Exit(1)
+			}
+			if cfg.Channels.Discord == nil {
+				fmt.Fprintln(os.Stderr, "error: discord channel not configured")
+				os.Exit(1)
+			}
+			filtered := cfg.Channels.Discord.AllowedRoles[:0]
+			for _, r := range cfg.Channels.Discord.AllowedRoles {
+				if r != args[1] {
+					filtered = append(filtered, r)
+				}
+			}
+			cfg.Channels.Discord.AllowedRoles = filtered
+			if err := saveConfig(cfg, cfgPath); err != nil {
+				fmt.Fprintf(os.Stderr, "error: save config: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("Removed role %s from %s allowed_roles\n", args[1], args[0])
+			return
+		}
+		channelIDs := resolveChannelIDs(args[0])
+		if len(channelIDs) == 0 {
+			fmt.Fprintf(os.Stderr, "error: no channel IDs configured for %q\n", args[0])
+			os.Exit(1)
+		}
+		db := openDB()
+		defer db.Close()
+		st := access.NewStore(db)
+		for _, chID := range channelIDs {
+			if err := st.RemoveUser(cmd.Context(), chID, args[1]); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+		}
+		fmt.Printf("Removed %s from %s allowlist\n", args[1], args[0])
+	},
+}
+
+var accessListCmd = &cobra.Command{
+	Use:   "list <channel>",
+	Short: "List authorized users and roles for a channel",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		// Show roles from config.
+		cfgPath := resolveDefaultConfigPath()
+		if cfg, err := config.Load(cfgPath); err == nil && cfg.Channels.Discord != nil {
+			if len(cfg.Channels.Discord.AllowedRoles) > 0 {
+				fmt.Println("Roles (from config):")
+				for _, r := range cfg.Channels.Discord.AllowedRoles {
+					fmt.Printf("  %s\n", r)
+				}
+				fmt.Println()
+			}
+		}
+		// Show users from DB, aggregated across all configured channel IDs.
+		// The DB keys allowed_users by real Discord channel ID, not adapter name.
+		channelIDs := resolveChannelIDs(args[0])
+		if len(channelIDs) == 0 {
+			fmt.Fprintf(os.Stderr, "error: no channel IDs configured for %q\n", args[0])
+			os.Exit(1)
+		}
+		db := openDB()
+		defer db.Close()
+		st := access.NewStore(db)
+		var allUsers []access.AllowedUser
+		seen := map[string]struct{}{}
+		for _, chID := range channelIDs {
+			users, err := st.ListUsers(cmd.Context(), chID)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			for _, u := range users {
+				if _, ok := seen[u.UserID]; !ok {
+					seen[u.UserID] = struct{}{}
+					allUsers = append(allUsers, u)
+				}
+			}
+		}
+		if len(allUsers) == 0 {
+			fmt.Println("No authorized users.")
+			return
+		}
+		fmt.Printf("%-22s  %-20s  %-10s  %s\n", "User ID", "Username", "Source", "Added")
+		fmt.Println(strings.Repeat("─", 70))
+		for _, u := range allUsers {
+			fmt.Printf("%-22s  %-20s  %-10s  %s\n", u.UserID, u.Username, u.Source, u.AddedAt.Format("2006-01-02"))
+		}
+	},
+}
+
+// ---- init command ------------------------------------------------------------
+
+var initNonInteractive bool
+
+var initCmd = &cobra.Command{
+	Use:   "init",
+	Short: "Interactive setup wizard",
+	Long:  "Run the Chandra setup wizard to configure provider, channels, and identity.",
+	Run: func(cmd *cobra.Command, args []string) {
+		opts := setup.DefaultOptions()
+		opts.NonInteractive = initNonInteractive
+
+		if envPath := os.Getenv("CHANDRA_CONFIG"); envPath != "" {
+			opts.ConfigPath = envPath
+		}
+
+		if err := setup.Run(cmd.Context(), opts); err != nil {
+			fmt.Fprintf(os.Stderr, "error: init failed: %v\n", err)
+			os.Exit(1)
+		}
+	},
+}
+
+// ---- config commands ---------------------------------------------------------
+
+var configCmd = &cobra.Command{
+	Use:   "config",
+	Short: "Configuration operations",
+}
+
+var configShowCmd = &cobra.Command{
+	Use:   "show",
+	Short: "Pretty-print the resolved configuration (secrets masked)",
+	Run: func(cmd *cobra.Command, args []string) {
+		cfgPath := resolveDefaultConfigPath()
+		data, err := os.ReadFile(cfgPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: read config: %v\n", err)
+			os.Exit(1)
+		}
+		// Mask secrets: lines containing api_key, token, password
+		lines := strings.Split(string(data), "\n")
+		for i, line := range lines {
+			lower := strings.ToLower(line)
+			if strings.Contains(lower, "api_key") || strings.Contains(lower, "token") || strings.Contains(lower, "password") {
+				if idx := strings.Index(line, "="); idx != -1 {
+					lines[i] = line[:idx+1] + ` "***masked***"`
+				}
+			}
+		}
+		fmt.Println(strings.Join(lines, "\n"))
+	},
+}
+
+var configValidateCmd = &cobra.Command{
+	Use:   "validate",
+	Short: "Parse and validate config.toml",
+	Run: func(cmd *cobra.Command, args []string) {
+		cfgPath := resolveDefaultConfigPath()
+		if _, err := config.Load(cfgPath); err != nil {
+			fmt.Fprintf(os.Stderr, "✗ Config invalid: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("✓ Config valid: %s\n", cfgPath)
+	},
+}
+
+var configSchemaCmd = &cobra.Command{
+	Use:   "schema",
+	Short: "Print the canonical config schema (suitable for redirection to a file)",
+	Run: func(cmd *cobra.Command, args []string) {
+		// Print the design schema as documented in docs/plans/setup-design.md §6.
+		// This gives users a reference template they can diff against their config.
+		fmt.Print(`# Chandra Configuration Schema
+# Generated by 'chandra config schema'
+# Copy and edit to create your own config.toml
+
+[identity]
+name = "Chandra"
+description = "A helpful personal assistant"
+persona_file = ""  # optional: path to detailed persona markdown
+
+[database]
+path = "~/.config/chandra/chandra.db"
+
+[provider]
+type = "openai"          # openai | anthropic | openrouter | ollama | custom
+base_url = ""            # custom endpoints must use HTTPS
+api_key = ""             # prefer CHANDRA_API_KEY env var
+default_model = "gpt-4o"
+embedding_model = "text-embedding-3-small"
+
+[channels.discord]
+enabled = false
+bot_token = ""           # prefer DISCORD_BOT_TOKEN env var
+channel_ids = []
+access_policy = "invite" # invite | request | role | allowlist | open
+allowed_guilds = []      # empty = any guild the bot is in
+allowed_users = []       # populated by Hello World reply or 'chandra access add'
+allowed_roles = []       # Discord role IDs (access_policy = "role" only)
+
+[scheduler]
+enabled = true
+heartbeat_interval = "5m"
+
+[mqtt]
+mode = "embedded"        # embedded | external | disabled
+bind = "127.0.0.1:1883"
+
+[tools]
+max_concurrent = 5
+max_rounds = 10
+
+# Exec tool — SECURITY: tighten before enabling in production.
+[tools.exec]
+allowed_shells = ["bash", "sh"]
+working_directory = "~"
+timeout = "5m"
+
+[skills]
+directory = "~/.config/chandra/skills"
+priority = 0.7
+max_context_tokens = 2000
+max_matches = 3
+`)
+	},
+}
+
 // init registers all subcommands on rootCmd and wires up flags.
 func init() {
 	// Daemon commands.
@@ -657,6 +1044,26 @@ func init() {
 
 	// Doctor command.
 	rootCmd.AddCommand(doctorCmd)
+
+	// Invite subcommands.
+	inviteCreateCmd.Flags().Int("uses", 1, "number of times the code can be used")
+	inviteCreateCmd.Flags().String("ttl", "168h", "time-to-live (e.g. 7d, 24h, 30d)")
+	inviteCmd.AddCommand(inviteCreateCmd, inviteListCmd, inviteRevokeCmd)
+	rootCmd.AddCommand(inviteCmd)
+
+	// Access subcommands.
+	accessAddCmd.Flags().BoolVar(&accessAddRole, "role", false, "treat <id> as a Discord role ID (updates config)")
+	accessRemoveCmd.Flags().BoolVar(&accessAddRole, "role", false, "treat <id> as a Discord role ID (updates config)")
+	accessCmd.AddCommand(accessAddCmd, accessRemoveCmd, accessListCmd)
+	rootCmd.AddCommand(accessCmd)
+
+	// Init command.
+	initCmd.Flags().BoolVar(&initNonInteractive, "non-interactive", false, "skip interactive prompts")
+	rootCmd.AddCommand(initCmd)
+
+	// Config subcommands.
+	configCmd.AddCommand(configShowCmd, configValidateCmd, configSchemaCmd)
+	rootCmd.AddCommand(configCmd)
 }
 
 // resolveDefaultConfigPath returns the default config file path, respecting
@@ -667,4 +1074,52 @@ func resolveDefaultConfigPath() string {
 	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".config", "chandra", "config.toml")
+}
+
+// openDB opens the configured SQLite database for CLI use.
+// Uses store.NewDB to ensure the sqlite3 driver and sqlite-vec extension are
+// properly registered (store.init() calls vec.Auto() on package load).
+func openDB() *sql.DB {
+	cfgPath := resolveDefaultConfigPath()
+	cfg, err := config.Load(cfgPath)
+	var dbPath string
+	if err == nil && cfg.Database.Path != "" {
+		dbPath = cfg.Database.Path
+	} else {
+		home, _ := os.UserHomeDir()
+		dbPath = filepath.Join(home, ".config", "chandra", "chandra.db")
+	}
+	st, err := store.NewDB(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: open database: %v\n", err)
+		os.Exit(1)
+	}
+	return st.DB()
+}
+
+// saveConfig serialises cfg back to the TOML config file at path.
+// Used by access add/remove --role to update allowed_roles in place.
+func saveConfig(cfg *config.Config, path string) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return toml.NewEncoder(f).Encode(cfg)
+}
+
+// resolveChannelIDs translates an adapter name (e.g., "discord") into the actual
+// Discord channel IDs configured in config.toml. This is necessary because the DB
+// keys allowed_users by real channel ID (a snowflake like "123456789"), not by
+// adapter name. Returns nil if the adapter is unsupported or not configured.
+func resolveChannelIDs(adapter string) []string {
+	if adapter != "discord" {
+		return nil
+	}
+	cfgPath := resolveDefaultConfigPath()
+	cfg, err := config.Load(cfgPath)
+	if err != nil || cfg.Channels.Discord == nil {
+		return nil
+	}
+	return cfg.Channels.Discord.ChannelIDs
 }
