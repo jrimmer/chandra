@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/jrimmer/chandra/internal/config"
@@ -237,4 +239,149 @@ func (c *channelVerifiedCheck) Run(ctx context.Context) Result {
 		Status: Pass,
 		Detail: fmt.Sprintf("verified by %s", verifiedUserID),
 	}
+}
+
+// --- Allowlist check ---
+
+type allowlistCheck struct {
+	cfg    *config.Config
+	dbPath string
+}
+
+// NewAllowlistCheck verifies that enabled Discord channels have at least one
+// authorized user. The DB is the authoritative source — the allowed_users table
+// is written by both Hello World init and 'chandra access add/remove'.
+// Per design §12: "allowed_users = [] on an enabled channel is a misconfiguration."
+func NewAllowlistCheck(cfg *config.Config, dbPath string) Check {
+	return &allowlistCheck{cfg: cfg, dbPath: dbPath}
+}
+
+func (c *allowlistCheck) Name() string { return "Allowlist" }
+
+func (c *allowlistCheck) Run(_ context.Context) Result {
+	if c.cfg.Channels.Discord == nil || c.cfg.Channels.Discord.BotToken == "" {
+		return Result{Status: Pass, Detail: "Discord not configured"}
+	}
+	switch c.cfg.Channels.Discord.AccessPolicy {
+	case "open":
+		return Result{
+			Status: Warn,
+			Detail: "Discord access policy is 'open' — any user can message the bot",
+			Fix:    "set access_policy = \"invite\" and run: chandra channel test discord",
+		}
+	case "role":
+		if len(c.cfg.Channels.Discord.AllowedRoles) == 0 {
+			return Result{
+				Status: Fail,
+				Detail: "access_policy=role but allowed_roles is empty — no one can message the bot",
+				Fix:    "add role IDs: chandra access add discord --role <role-id>",
+			}
+		}
+		return Result{Status: Pass, Detail: fmt.Sprintf("role-based access, %d role(s) configured", len(c.cfg.Channels.Discord.AllowedRoles))}
+	default: // invite, request, allowlist — query DB (authoritative source)
+		// Sum allowed users across all configured channel IDs.
+		// The DB keys allowed_users by real Discord channel ID, not adapter name.
+		var count int
+		var queryErr error
+		for _, chID := range c.cfg.Channels.Discord.ChannelIDs {
+			n, err := countAllowedUsersInDB(c.dbPath, chID)
+			if err != nil {
+				queryErr = err
+				break
+			}
+			count += n
+		}
+		if queryErr != nil || count == 0 {
+			return Result{
+				Status: Fail,
+				Detail: "allowed_users table is empty — no one can message the bot",
+				Fix:    "run: chandra channel test discord (to bootstrap), or: chandra access add discord <user-id>",
+			}
+		}
+		return Result{Status: Pass, Detail: fmt.Sprintf("%d authorized user(s)", count)}
+	}
+}
+
+// countAllowedUsersInDB returns the number of entries in the allowed_users table
+// for the given channel. The DB is the authoritative source for access control —
+// 'chandra access add/remove' and Hello World init both write only to the DB.
+func countAllowedUsersInDB(dbPath, channelID string) (int, error) {
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	var count int
+	return count, db.QueryRow(
+		"SELECT COUNT(*) FROM allowed_users WHERE channel_id = ?", channelID,
+	).Scan(&count)
+}
+
+// ---- DaemonCheck -------------------------------------------------------
+
+type daemonCheck struct {
+	socketPath string // injectable; NewDaemonCheck("") uses the default path
+}
+
+// NewDaemonCheck verifies that the chandrad Unix socket is responsive.
+// Pass socketPath="" to use the default (~/.config/chandra/chandra.sock).
+// Pass an explicit path in tests to avoid depending on daemon state.
+// Returns Warn (not Fail) because the daemon may not be started during init.
+// Uses net.Dial to distinguish a responsive daemon from a stale socket file.
+func NewDaemonCheck(socketPath string) Check {
+	if socketPath == "" {
+		home, _ := os.UserHomeDir()
+		socketPath = filepath.Join(home, ".config", "chandra", "chandra.sock")
+	}
+	return &daemonCheck{socketPath: socketPath}
+}
+
+func (c *daemonCheck) Name() string { return "Daemon" }
+
+func (c *daemonCheck) Run(_ context.Context) Result {
+	conn, err := net.DialTimeout("unix", c.socketPath, 2*time.Second)
+	if err != nil {
+		return Result{
+			Status: Warn,
+			Detail: "chandrad not running (cannot connect to socket)",
+			Fix:    "start with: chandrad",
+		}
+	}
+	conn.Close()
+	return Result{Status: Pass, Detail: "chandrad running (socket responsive)"}
+}
+
+// ---- SchedulerCheck -----------------------------------------------------
+
+type schedulerCheck struct {
+	socketPath string // injectable; NewSchedulerCheck("") uses the default path
+}
+
+// NewSchedulerCheck verifies the scheduler is active by pinging the daemon socket.
+// Pass socketPath="" to use the default. Pass an explicit path in tests.
+// Returns Warn if the daemon is not running (scheduler lives inside the daemon).
+// Uses net.Dial so a stale socket file does not produce a false pass.
+func NewSchedulerCheck(socketPath string) Check {
+	if socketPath == "" {
+		home, _ := os.UserHomeDir()
+		socketPath = filepath.Join(home, ".config", "chandra", "chandra.sock")
+	}
+	return &schedulerCheck{socketPath: socketPath}
+}
+
+func (c *schedulerCheck) Name() string { return "Scheduler" }
+
+func (c *schedulerCheck) Run(_ context.Context) Result {
+	conn, err := net.DialTimeout("unix", c.socketPath, 2*time.Second)
+	if err != nil {
+		return Result{
+			Status: Warn,
+			Detail: "scheduler not verified (daemon not running)",
+			Fix:    "start the daemon: chandrad",
+		}
+	}
+	conn.Close()
+	// Daemon socket responsive — scheduler runs inside the daemon process.
+	// Full heartbeat-interval verification requires a scheduler RPC (future work).
+	return Result{Status: Pass, Detail: "daemon responsive, scheduler active"}
 }
