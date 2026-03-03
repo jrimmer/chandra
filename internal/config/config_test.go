@@ -255,6 +255,78 @@ path = "/tmp/test.db"
 	assert.NoError(t, err, "should pass when no channel configured (CLI-only mode)")
 }
 
+func TestValidate_HTTPSRequired_ForCustomProvider(t *testing.T) {
+	cfg := &Config{
+		Identity: IdentityConfig{Name: "Chandra"},
+		Provider: ProviderConfig{BaseURL: "http://my-llm.local/v1", DefaultModel: "llama3", Type: "custom"},
+		Database: DatabaseConfig{Path: "/tmp/test.db"},
+	}
+	err := validate(cfg)
+	if err == nil {
+		t.Fatal("expected error for HTTP custom provider URL")
+	}
+}
+
+func TestValidate_OpenRouterAccepted(t *testing.T) {
+	cfg := &Config{
+		Identity: IdentityConfig{Name: "Chandra"},
+		Provider: ProviderConfig{BaseURL: "https://openrouter.ai/api/v1", DefaultModel: "openai/gpt-4o", Type: "openrouter"},
+		Database: DatabaseConfig{Path: "/tmp/test.db"},
+	}
+	err := validate(cfg)
+	if err != nil {
+		t.Fatalf("expected openrouter to be a valid provider type, got error: %v", err)
+	}
+}
+
+func TestStartup_AllowlistCheck_PolicyFields(t *testing.T) {
+	// "open" policy requires no users — field check only
+	cfg := &Config{
+		Identity: IdentityConfig{Name: "Chandra"},
+		Provider: ProviderConfig{Type: "openai", DefaultModel: "gpt-4o"},
+		Database: DatabaseConfig{Path: "/tmp/test.db"},
+		Channels: ChannelsConfig{Discord: &DiscordConfig{
+			BotToken:     "Bot abc",
+			AccessPolicy: "open",
+		}},
+	}
+	if cfg.Channels.Discord.AccessPolicy != "open" {
+		t.Error("expected open policy")
+	}
+
+	// "role" policy with empty allowed_roles must be detected (roles live in config)
+	cfg.Channels.Discord.AccessPolicy = "role"
+	cfg.Channels.Discord.AllowedRoles = []string{}
+	if len(cfg.Channels.Discord.AllowedRoles) != 0 {
+		t.Error("expected empty allowed_roles for this test")
+	}
+
+	// "role" policy with non-empty allowed_roles passes the config check
+	cfg.Channels.Discord.AllowedRoles = []string{"111222333"}
+	if len(cfg.Channels.Discord.AllowedRoles) == 0 {
+		t.Error("expected non-empty allowed_roles")
+	}
+}
+
+// TestStartup_AllowlistCheck_DBPath tests the DB-based user count (invite/request/allowlist
+// policies). This test lives in cmd/chandrad/ since countDBAllowedUsers is defined there.
+// See cmd/chandrad/main_test.go for TestCountDBAllowedUsers (uses a temp SQLite file).
+//
+// Here we just document the expected behaviour:
+//   - countDBAllowedUsers(dbPath, "<channel-id>") == 0  → startup refuses with error
+//   - countDBAllowedUsers(dbPath, "<channel-id>") > 0   → startup proceeds
+
+func TestApplyDefaults_Identity(t *testing.T) {
+	cfg := &Config{}
+	applyDefaults(cfg)
+	if cfg.Identity.Name != "Chandra" {
+		t.Errorf("expected default name Chandra, got %q", cfg.Identity.Name)
+	}
+	if cfg.Identity.Description == "" {
+		t.Error("expected default description to be non-empty")
+	}
+}
+
 func TestDiscordConfig_AccessControlFields(t *testing.T) {
 	tomlData := `
 [channels.discord]

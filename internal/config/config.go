@@ -335,6 +335,10 @@ func validate(cfg *Config) error {
 	default:
 		errs = append(errs, fmt.Sprintf("provider.type %q is not valid (openai, anthropic, openrouter, ollama, custom)", cfg.Provider.Type))
 	}
+	if cfg.Provider.Type == "custom" && cfg.Provider.BaseURL != "" &&
+		len(cfg.Provider.BaseURL) >= 7 && cfg.Provider.BaseURL[:7] == "http://" {
+		errs = append(errs, "provider.base_url must use HTTPS for custom endpoints")
+	}
 	if cfg.Database.Path == "" {
 		errs = append(errs, "database.path is required")
 	}
