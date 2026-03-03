@@ -441,13 +441,22 @@ var providerTestCmd = &cobra.Command{
 		}
 
 		fmt.Printf("Testing %s connection (%s)...\n", cfg.Provider.Type, cfg.Provider.BaseURL)
+		if providerTestVerbose {
+			fmt.Printf("Testing: GET %s/models\n", cfg.Provider.BaseURL)
+		}
 		check := doctor.NewProviderCheck(&cfg.Provider)
 		result := check.Run(cmd.Context())
 
 		if result.Status == doctor.Pass {
 			fmt.Printf("✓ %s\n", result.Detail)
+			if providerTestVerbose && result.Detail != "" {
+				fmt.Printf("Response: %s\n", result.Detail)
+			}
 		} else {
 			fmt.Printf("✗ %s\n", result.Detail)
+			if providerTestVerbose && result.Detail != "" {
+				fmt.Printf("Response: %s\n", result.Detail)
+			}
 			if result.Fix != "" {
 				fmt.Printf("  Fix: %s\n", result.Fix)
 			}
