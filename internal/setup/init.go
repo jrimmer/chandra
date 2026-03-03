@@ -498,17 +498,27 @@ func Run(ctx context.Context, opts Options) error {
 			loopSucceeded = true
 
 			// Bootstrap DB: channel_verifications + allowed_users.
-			// Both writes are unconditional — the design states "The Hello World reply
-			// bootstraps the allowlist — no manual ID lookup needed" (design §346).
 			// Use the real Discord channel ID as the key — NOT the adapter name "discord".
 			if err := persistChannelVerified(opts.DBPath, discordChannelID, result.ReplyUserID); err != nil {
 				fmt.Printf("  Warning: could not save channel verification: %v\n", err)
 				fmt.Println("  Run 'chandra channel test discord' to retry.")
 			}
-			if err := addUserToAllowlist(opts.DBPath, discordChannelID, result.ReplyUserID, result.ReplyUsername); err != nil {
-				fmt.Printf("  Warning: could not add %s to allowlist: %v\n", result.ReplyUsername, err)
+
+			// Confirm before adding the replying user to the allowlist (design §2).
+			var confirmed bool
+			confirmForm := huh.NewForm(huh.NewGroup(
+				huh.NewConfirm().
+					Title(fmt.Sprintf("Add %s as an authorized user?", result.ReplyUsername)).
+					Value(&confirmed),
+			))
+			if confirmErr := confirmForm.Run(); confirmErr != nil || !confirmed {
+				fmt.Println("Skipped. You can add users later with: chandra access add")
 			} else {
-				fmt.Printf("%s bootstrapped as authorized user\n", result.ReplyUsername)
+				if err := addUserToAllowlist(opts.DBPath, discordChannelID, result.ReplyUserID, result.ReplyUsername); err != nil {
+					fmt.Printf("  Warning: could not add %s to allowlist: %v\n", result.ReplyUsername, err)
+				} else {
+					fmt.Printf("%s bootstrapped as authorized user\n", result.ReplyUsername)
+				}
 			}
 		}
 	}
