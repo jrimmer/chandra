@@ -229,14 +229,14 @@ func run(ctx context.Context, safeMode bool) error {
 	// -------------------------------------------------------------------
 	var chatProvider provider.Provider
 
-	if cfg.Provider.BaseURL != "" && cfg.Provider.Model != "" {
+	if cfg.Provider.BaseURL != "" && cfg.Provider.DefaultModel != "" {
 		switch cfg.Provider.Type {
 		case "anthropic":
-			chatProvider = anthropic.NewProvider(cfg.Provider.BaseURL, cfg.Provider.APIKey, cfg.Provider.Model)
-			slog.Info("chandrad: anthropic provider ready", "model", cfg.Provider.Model)
-		case "openai", "ollama":
-			chatProvider = openai.NewProvider(cfg.Provider.BaseURL, cfg.Provider.APIKey, cfg.Provider.Model)
-			slog.Info("chandrad: openai-compatible provider ready", "model", cfg.Provider.Model)
+			chatProvider = anthropic.NewProvider(cfg.Provider.BaseURL, cfg.Provider.APIKey, cfg.Provider.DefaultModel)
+			slog.Info("chandrad: anthropic provider ready", "model", cfg.Provider.DefaultModel)
+		case "openai", "ollama", "openrouter", "custom":
+			chatProvider = openai.NewProvider(cfg.Provider.BaseURL, cfg.Provider.APIKey, cfg.Provider.DefaultModel)
+			slog.Info("chandrad: openai-compatible provider ready", "model", cfg.Provider.DefaultModel)
 		default:
 			slog.Warn("chandrad: unknown provider type, skipping", "type", cfg.Provider.Type)
 		}
@@ -316,10 +316,10 @@ func run(ctx context.Context, safeMode bool) error {
 	var discordChannel channels.Channel
 	var discordInbound chan channels.InboundMessage
 	var discordDC *discord.Discord
-	discordConfigured := !safeMode && cfg.Channels.Discord != nil && cfg.Channels.Discord.Token != ""
+	discordConfigured := !safeMode && cfg.Channels.Discord != nil && cfg.Channels.Discord.BotToken != ""
 	if discordConfigured {
 		slog.Info("chandrad: starting Discord channel listener")
-		dc, dcErr := discord.NewDiscord(cfg.Channels.Discord.Token, cfg.Channels.Discord.ChannelIDs)
+		dc, dcErr := discord.NewDiscord(cfg.Channels.Discord.BotToken, cfg.Channels.Discord.ChannelIDs)
 		if dcErr != nil {
 			return fmt.Errorf("chandrad: discord init: %w", dcErr)
 		}
@@ -360,7 +360,7 @@ func run(ctx context.Context, safeMode bool) error {
 			ActionLog:      alog,
 			Channel:        discordChannel, // G18: wire Discord channel for response sending
 			Sessions:       sessionMgr,     // required for RunScheduled to process turns
-			MaxRounds:      cfg.Agent.MaxToolRounds,
+			MaxRounds:      cfg.Identity.MaxToolRounds,
 			SkillRegistry:  skillReg,
 			SkillPriority:  cfg.Skills.Priority,
 			SkillMaxTokens: cfg.Skills.MaxContextTokens,
@@ -570,7 +570,9 @@ func run(ctx context.Context, safeMode bool) error {
 // defaultConfig returns a Config with safe defaults for when no config file exists.
 func defaultConfig() *config.Config {
 	return &config.Config{
-		Agent: config.AgentConfig{
+		Identity: config.IdentityConfig{
+			Name:          "Chandra",
+			Description:   "A helpful personal assistant",
 			MaxToolRounds: 5,
 		},
 		Scheduler: config.SchedulerConfig{

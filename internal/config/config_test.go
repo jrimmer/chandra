@@ -5,43 +5,78 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/BurntSushi/toml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestConfig_DesignSchema(t *testing.T) {
+	tomlData := `
+[identity]
+name = "Chandra"
+description = "A helpful personal assistant"
+
+[database]
+path = "/tmp/test.db"
+
+[provider]
+type = "openai"
+base_url = "https://api.openai.com/v1"
+api_key = "sk-test"
+default_model = "gpt-4o"
+embedding_model = "text-embedding-3-small"
+
+[channels.discord]
+enabled = true
+bot_token = "Bot abc123"
+channel_ids = ["12345"]
+`
+	var cfg Config
+	if _, err := toml.Decode(tomlData, &cfg); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if cfg.Identity.Name != "Chandra" {
+		t.Errorf("expected identity.name=Chandra, got %q", cfg.Identity.Name)
+	}
+	if cfg.Provider.DefaultModel != "gpt-4o" {
+		t.Errorf("expected provider.default_model=gpt-4o, got %q", cfg.Provider.DefaultModel)
+	}
+	if cfg.Provider.EmbeddingModel != "text-embedding-3-small" {
+		t.Errorf("expected provider.embedding_model=text-embedding-3-small, got %q", cfg.Provider.EmbeddingModel)
+	}
+	if cfg.Channels.Discord == nil || cfg.Channels.Discord.BotToken != "Bot abc123" {
+		t.Errorf("expected channels.discord.bot_token=Bot abc123")
+	}
+}
 
 func TestLoad_MinimalConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	err := os.WriteFile(path, []byte(`
-[agent]
+[identity]
 name = "Chandra"
-persona = "Test persona"
+description = "Test persona"
 
 [provider]
 base_url = "http://localhost:11434"
 api_key = "test"
-model = "llama3"
+default_model = "llama3"
 type = "openai"
-
-[embeddings]
-base_url = "http://localhost:11434/v1"
-api_key = "test"
-model = "nomic-embed-text"
 
 [database]
 path = "/tmp/test-chandra.db"
 
 [channels.discord]
-token = "test-token"
+bot_token = "test-token"
 channel_ids = ["123"]
 `), 0600)
 	require.NoError(t, err)
 
 	cfg, err := Load(path)
 	require.NoError(t, err)
-	assert.Equal(t, "Chandra", cfg.Agent.Name)
+	assert.Equal(t, "Chandra", cfg.Identity.Name)
 	assert.Equal(t, "openai", cfg.Provider.Type)
-	assert.Equal(t, 5, cfg.Agent.MaxToolRounds, "should default to 5")
+	assert.Equal(t, 5, cfg.Identity.MaxToolRounds, "should default to 5")
 	assert.Equal(t, "60s", cfg.Scheduler.TickInterval, "should default to 60s")
 	assert.False(t, cfg.ActionLog.LLMSummaries, "should default to false")
 }
@@ -52,26 +87,21 @@ func TestLoad_EnvVarInterpolation(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	err := os.WriteFile(path, []byte(`
-[agent]
+[identity]
 name = "Chandra"
-persona = "Test"
+description = "Test"
 
 [provider]
 base_url = "http://localhost"
 api_key = "${TEST_API_KEY}"
-model = "test"
+default_model = "test"
 type = "openai"
-
-[embeddings]
-base_url = "http://localhost"
-api_key = "${TEST_API_KEY}"
-model = "test"
 
 [database]
 path = "/tmp/test.db"
 
 [channels.discord]
-token = "test"
+bot_token = "test"
 channel_ids = ["123"]
 `), 0600)
 	require.NoError(t, err)
@@ -84,7 +114,7 @@ channel_ids = ["123"]
 func TestLoad_MissingRequiredFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	err := os.WriteFile(path, []byte(`
-[agent]
+[identity]
 name = "Chandra"
 `), 0600)
 	require.NoError(t, err)
@@ -194,20 +224,15 @@ func TestConfig_InfrastructureCacheTTL(t *testing.T) {
 func TestLoad_MissingChannel(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	err := os.WriteFile(path, []byte(`
-[agent]
+[identity]
 name = "Chandra"
-persona = "Test"
+description = "Test"
 
 [provider]
 base_url = "http://localhost"
 api_key = "test"
-model = "test"
+default_model = "test"
 type = "openai"
-
-[embeddings]
-base_url = "http://localhost"
-api_key = "test"
-model = "test"
 
 [database]
 path = "/tmp/test.db"

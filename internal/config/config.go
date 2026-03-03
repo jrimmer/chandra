@@ -9,22 +9,28 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// AgentConfig holds agent identity and behaviour settings.
-type AgentConfig struct {
+// IdentityConfig holds agent name and persona (replaces AgentConfig).
+// TOML section: [identity]
+type IdentityConfig struct {
 	Name          string `toml:"name"`
-	Persona       string `toml:"persona"`
+	Description   string `toml:"description"`
+	PersonaFile   string `toml:"persona_file"`
 	MaxToolRounds int    `toml:"max_tool_rounds"`
 }
 
-// ProviderConfig holds LLM chat provider settings.
+// ProviderConfig holds LLM provider settings.
+// embedding_model replaces the separate [embeddings] section.
 type ProviderConfig struct {
-	BaseURL string `toml:"base_url"`
-	APIKey  string `toml:"api_key"`
-	Model   string `toml:"model"`
-	Type    string `toml:"type"` // openai | anthropic | ollama
+	Type           string `toml:"type"`    // openai | anthropic | openrouter | ollama | custom
+	BaseURL        string `toml:"base_url"`
+	APIKey         string `toml:"api_key"`
+	DefaultModel   string `toml:"default_model"`
+	EmbeddingModel string `toml:"embedding_model"`
 }
 
-// EmbeddingsConfig holds embedding provider settings.
+// EmbeddingsConfig is kept for backwards compatibility only.
+// New configs should use provider.embedding_model instead.
+// TOML section: [embeddings] -- still parsed but EmbeddingModel takes precedence.
 type EmbeddingsConfig struct {
 	BaseURL    string `toml:"base_url"`
 	APIKey     string `toml:"api_key"`
@@ -64,8 +70,13 @@ type MQTTConfig struct {
 
 // DiscordConfig holds Discord channel settings.
 type DiscordConfig struct {
-	Token      string   `toml:"token"`
-	ChannelIDs []string `toml:"channel_ids"`
+	Enabled       bool     `toml:"enabled"`
+	BotToken      string   `toml:"bot_token"`
+	ChannelIDs    []string `toml:"channel_ids"`
+	AccessPolicy  string   `toml:"access_policy"` // invite | request | role | allowlist | open
+	AllowedUsers  []string `toml:"allowed_users"`
+	AllowedGuilds []string `toml:"allowed_guilds"`
+	AllowedRoles  []string `toml:"allowed_roles"`
 }
 
 // ChannelsConfig holds all inbound channel configurations.
@@ -143,9 +154,9 @@ type InfrastructureConfig struct {
 
 // Config is the top-level configuration struct.
 type Config struct {
-	Agent          AgentConfig          `toml:"agent"`
+	Identity       IdentityConfig       `toml:"identity"`
 	Provider       ProviderConfig       `toml:"provider"`
-	Embeddings     EmbeddingsConfig     `toml:"embeddings"`
+	Embeddings     EmbeddingsConfig     `toml:"embeddings"` // kept for backwards compat
 	Database       DatabaseConfig       `toml:"database"`
 	Budget         BudgetConfig         `toml:"budget"`
 	Scheduler      SchedulerConfig      `toml:"scheduler"`
@@ -198,8 +209,14 @@ func Load(path string) (*Config, error) {
 
 // applyDefaults sets default values for optional config fields.
 func applyDefaults(cfg *Config) {
-	if cfg.Agent.MaxToolRounds == 0 {
-		cfg.Agent.MaxToolRounds = 5
+	if cfg.Identity.MaxToolRounds == 0 {
+		cfg.Identity.MaxToolRounds = 5
+	}
+	if cfg.Identity.Name == "" {
+		cfg.Identity.Name = "Chandra"
+	}
+	if cfg.Identity.Description == "" {
+		cfg.Identity.Description = "A helpful personal assistant"
 	}
 	if cfg.Scheduler.TickInterval == "" {
 		cfg.Scheduler.TickInterval = "60s"
@@ -233,6 +250,15 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Embeddings.Dimensions == 0 {
 		cfg.Embeddings.Dimensions = 1536
+	}
+	if cfg.Provider.EmbeddingModel == "" {
+		cfg.Provider.EmbeddingModel = "text-embedding-3-small"
+	}
+	if cfg.Provider.DefaultModel == "" && cfg.Provider.Type == "openai" {
+		cfg.Provider.DefaultModel = "gpt-4o"
+	}
+	if cfg.Channels.Discord != nil && cfg.Channels.Discord.AccessPolicy == "" {
+		cfg.Channels.Discord.AccessPolicy = "invite"
 	}
 	if cfg.Skills.Path == "" {
 		cfg.Skills.Path = "~/.config/chandra/skills"
@@ -294,38 +320,27 @@ func applyDefaults(cfg *Config) {
 func validate(cfg *Config) error {
 	var errs []string
 
-	if cfg.Agent.Name == "" {
-		errs = append(errs, "agent.name is required")
-	}
-	if cfg.Agent.Persona == "" {
-		errs = append(errs, "agent.persona is required")
+	// identity.name is optional -- defaults applied above
+	if cfg.Provider.DefaultModel == "" {
+		errs = append(errs, "provider.default_model is required")
 	}
 	if cfg.Provider.BaseURL == "" {
 		errs = append(errs, "provider.base_url is required")
 	}
-	if cfg.Provider.Model == "" {
-		errs = append(errs, "provider.model is required")
-	}
 	switch cfg.Provider.Type {
-	case "openai", "anthropic", "ollama":
+	case "openai", "anthropic", "openrouter", "ollama", "custom":
 		// valid
 	case "":
 		errs = append(errs, "provider.type is required")
 	default:
-		errs = append(errs, fmt.Sprintf("provider.type %q is not valid (openai, anthropic, ollama)", cfg.Provider.Type))
-	}
-	if cfg.Embeddings.BaseURL == "" {
-		errs = append(errs, "embeddings.base_url is required")
-	}
-	if cfg.Embeddings.Model == "" {
-		errs = append(errs, "embeddings.model is required")
+		errs = append(errs, fmt.Sprintf("provider.type %q is not valid (openai, anthropic, openrouter, ollama, custom)", cfg.Provider.Type))
 	}
 	if cfg.Database.Path == "" {
 		errs = append(errs, "database.path is required")
 	}
 
 	// At least one channel must be configured.
-	if cfg.Channels.Discord == nil || cfg.Channels.Discord.Token == "" {
+	if cfg.Channels.Discord == nil || cfg.Channels.Discord.BotToken == "" {
 		errs = append(errs, "at least one channel must be configured (channels.discord)")
 	}
 
