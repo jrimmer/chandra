@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/jrimmer/chandra/internal/config"
@@ -149,7 +150,7 @@ func (c *providerCheck) Run(ctx context.Context) Result {
 	if c.cfg.BaseURL == "" {
 		return Result{Status: Fail, Detail: "provider not configured", Fix: "run: chandra init"}
 	}
-	if c.cfg.Type == "custom" && len(c.cfg.BaseURL) > 4 && c.cfg.BaseURL[:4] != "http" {
+	if c.cfg.Type == "custom" && !strings.HasPrefix(c.cfg.BaseURL, "https://") {
 		return Result{Status: Fail, Detail: "custom provider URL must use HTTPS", Fix: "update provider.base_url in config"}
 	}
 
