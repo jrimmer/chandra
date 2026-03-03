@@ -189,7 +189,7 @@ func (c *providerCheck) Run(ctx context.Context) Result {
 
 	return Result{
 		Status: Pass,
-		Detail: fmt.Sprintf("%s reachable, %s available", c.cfg.Type, c.cfg.Model),
+		Detail: fmt.Sprintf("%s reachable, %s available", c.cfg.Type, c.cfg.DefaultModel),
 	}
 }
 
