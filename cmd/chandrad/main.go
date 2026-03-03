@@ -735,6 +735,11 @@ func registerHandlers(
 		}, nil
 	})
 
+	// daemon.start — already running if this handler is reached
+	srv.Handle("daemon.start", func(ctx context.Context, _ json.RawMessage) (any, error) {
+		return map[string]any{"ok": true, "message": "daemon already running"}, nil
+	})
+
 	// daemon.stop — triggers graceful shutdown via context cancel.
 	srv.Handle("daemon.stop", func(ctx context.Context, _ json.RawMessage) (any, error) {
 		slog.Info("chandrad: stop requested via API")
