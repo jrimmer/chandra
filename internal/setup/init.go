@@ -660,21 +660,72 @@ func runProviderStage(ctx context.Context, providerType, apiKey, model *string) 
 
 	// Step 3: prompt for API key and model
 	defaultModel := defaultModelForProvider(*providerType)
-	form3 := huh.NewForm(huh.NewGroup(
-		huh.NewInput().
-			Title("Enter your API key (leave blank for Ollama)").
-			EchoMode(huh.EchoModePassword).
-			Value(apiKey),
-		huh.NewInput().
-			Title("Default model").
-			Placeholder(defaultModel).
-			Value(model),
-	))
-	if err := form3.Run(); err != nil {
-		return err
-	}
-	if *model == "" {
-		*model = defaultModel
+
+	// For OpenRouter, show a curated model picker instead of a free-text field.
+	// OpenRouter exposes 100+ models using provider/model-name format; a plain
+	// text field with a placeholder doesn't help users who don't know the IDs.
+	if *providerType == "openrouter" {
+		const orCustomSentinel = "__custom__"
+		selectedModel := defaultModel
+		form3a := huh.NewForm(huh.NewGroup(
+			huh.NewInput().
+				Title("Enter your OpenRouter API key").
+				EchoMode(huh.EchoModePassword).
+				Value(apiKey),
+			huh.NewSelect[string]().
+				Title("Model").
+				Description("Popular models — pricing at openrouter.ai/models").
+				Options(
+					huh.NewOption("Claude Sonnet 4.5  (anthropic/claude-sonnet-4-5)", "anthropic/claude-sonnet-4-5"),
+					huh.NewOption("Claude Haiku 3.5   (anthropic/claude-3-5-haiku)", "anthropic/claude-3-5-haiku"),
+					huh.NewOption("Claude Opus 4.5    (anthropic/claude-opus-4-5)", "anthropic/claude-opus-4-5"),
+					huh.NewOption("GPT-4o             (openai/gpt-4o)", "openai/gpt-4o"),
+					huh.NewOption("GPT-4o mini        (openai/gpt-4o-mini)", "openai/gpt-4o-mini"),
+					huh.NewOption("Gemini 2.0 Flash   (google/gemini-2.0-flash-001)", "google/gemini-2.0-flash-001"),
+					huh.NewOption("Llama 3.3 70B      (meta-llama/llama-3.3-70b-instruct)", "meta-llama/llama-3.3-70b-instruct"),
+					huh.NewOption("Custom — enter model ID", orCustomSentinel),
+				).
+				Value(&selectedModel),
+		))
+		if err := form3a.Run(); err != nil {
+			return err
+		}
+		if selectedModel == orCustomSentinel {
+			var customModel string
+			form3b := huh.NewForm(huh.NewGroup(
+				huh.NewInput().
+					Title("Model ID").
+					Description("Format: provider/model-name  e.g. mistralai/mistral-7b-instruct").
+					Placeholder("provider/model-name").
+					Value(&customModel),
+			))
+			if err := form3b.Run(); err != nil {
+				return err
+			}
+			if customModel == "" {
+				customModel = defaultModel
+			}
+			*model = customModel
+		} else {
+			*model = selectedModel
+		}
+	} else {
+		form3 := huh.NewForm(huh.NewGroup(
+			huh.NewInput().
+				Title("Enter your API key (leave blank for Ollama)").
+				EchoMode(huh.EchoModePassword).
+				Value(apiKey),
+			huh.NewInput().
+				Title("Default model").
+				Placeholder(defaultModel).
+				Value(model),
+		))
+		if err := form3.Run(); err != nil {
+			return err
+		}
+		if *model == "" {
+			*model = defaultModel
+		}
 	}
 
 	// Test the provider connection before proceeding (design §1 init stage table:
