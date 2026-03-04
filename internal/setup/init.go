@@ -472,9 +472,15 @@ func Run(ctx context.Context, opts Options) error {
 			fmt.Printf("failed: %v\n", err)
 			return fmt.Errorf("initialise database: %w", err)
 		}
+		fmt.Println("done")
+		fmt.Print("[Step 4/6] Running migrations...      ")
+		if err := dbStore.Migrate(); err != nil {
+			dbStore.Close()
+			fmt.Printf("failed: %v\n", err)
+			return fmt.Errorf("run migrations: %w", err)
+		}
 		dbStore.Close()
 		fmt.Println("done")
-		fmt.Println("[Step 4/6] Running migrations...      done") // migrations run atomically inside store.NewDB
 
 		cp.ConfigWritten = true
 		if err := SaveCheckpoint(cpPath, cp); err != nil {
