@@ -39,11 +39,11 @@ func NewHAGetState(baseURL, token string) *HAGetState {
 // SetHTTPClient replaces the HTTP client used by HAGetState. Useful for testing.
 func (h *HAGetState) SetHTTPClient(client *http.Client) { h.httpClient = client }
 
-// Definition returns the ToolDef for homeassistant.get_state.
+// Definition returns the ToolDef for homeassistant_get_state.
 func (h *HAGetState) Definition() pkg.ToolDef {
 	params := json.RawMessage(`{"type":"object","properties":{"entity_id":{"type":"string"}},"required":["entity_id"]}`)
 	return pkg.ToolDef{
-		Name:         "homeassistant.get_state",
+		Name:         "homeassistant_get_state",
 		Description:  "Get the current state of a Home Assistant entity",
 		Tier:         pkg.TierTrusted,
 		Capabilities: []pkg.Capability{pkg.CapNetworkOut},
@@ -114,11 +114,11 @@ func NewHASetState(baseURL, token string) *HASetState {
 // SetHTTPClient replaces the HTTP client used by HASetState. Useful for testing.
 func (h *HASetState) SetHTTPClient(client *http.Client) { h.httpClient = client }
 
-// Definition returns the ToolDef for homeassistant.set_state.
+// Definition returns the ToolDef for homeassistant_set_state.
 func (h *HASetState) Definition() pkg.ToolDef {
 	params := json.RawMessage(`{"type":"object","properties":{"domain":{"type":"string"},"service":{"type":"string"},"entity_id":{"type":"string"}},"required":["domain","service"]}`)
 	return pkg.ToolDef{
-		Name:         "homeassistant.set_state",
+		Name:         "homeassistant_set_state",
 		Description:  "Call a Home Assistant service to change entity state",
 		Tier:         pkg.TierTrusted,
 		Capabilities: []pkg.Capability{pkg.CapNetworkOut},

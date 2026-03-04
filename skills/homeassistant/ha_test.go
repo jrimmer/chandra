@@ -21,8 +21,8 @@ func TestHA_GetState_Definition(t *testing.T) {
 	h := homeassistant.NewHAGetState("http://localhost:8123", "token")
 	def := h.Definition()
 
-	if def.Name != "homeassistant.get_state" {
-		t.Errorf("expected name %q, got %q", "homeassistant.get_state", def.Name)
+	if def.Name != "homeassistant_get_state" {
+		t.Errorf("expected name %q, got %q", "homeassistant_get_state", def.Name)
 	}
 	if def.Tier != pkg.TierTrusted {
 		t.Errorf("expected TierTrusted, got %d", def.Tier)
@@ -35,8 +35,8 @@ func TestHA_SetState_Definition(t *testing.T) {
 	h := homeassistant.NewHASetState("http://localhost:8123", "token")
 	def := h.Definition()
 
-	if def.Name != "homeassistant.set_state" {
-		t.Errorf("expected name %q, got %q", "homeassistant.set_state", def.Name)
+	if def.Name != "homeassistant_set_state" {
+		t.Errorf("expected name %q, got %q", "homeassistant_set_state", def.Name)
 	}
 	if def.Tier != pkg.TierTrusted {
 		t.Errorf("expected TierTrusted, got %d", def.Tier)
@@ -69,7 +69,7 @@ func TestHA_GetState_Execute_MockAPI(t *testing.T) {
 	h := homeassistant.NewHAGetState(srv.URL, "test-token")
 	h.SetHTTPClient(srv.Client())
 	params, _ := json.Marshal(map[string]string{"entity_id": "light.living_room"})
-	call := pkg.ToolCall{ID: "get-1", Name: "homeassistant.get_state", Parameters: params}
+	call := pkg.ToolCall{ID: "get-1", Name: "homeassistant_get_state", Parameters: params}
 
 	result, err := h.Execute(context.Background(), call)
 	if err != nil {
@@ -113,7 +113,7 @@ func TestHA_SetState_Execute_MockAPI(t *testing.T) {
 		"service":   "turn_off",
 		"entity_id": "light.living_room",
 	})
-	call := pkg.ToolCall{ID: "set-1", Name: "homeassistant.set_state", Parameters: params}
+	call := pkg.ToolCall{ID: "set-1", Name: "homeassistant_set_state", Parameters: params}
 
 	result, err := h.Execute(context.Background(), call)
 	if err != nil {
@@ -130,7 +130,7 @@ func TestHA_SetState_Execute_MockAPI(t *testing.T) {
 func TestHA_GetState_MissingEntityID(t *testing.T) {
 	h := homeassistant.NewHAGetState("http://localhost:8123", "token")
 	params, _ := json.Marshal(map[string]string{})
-	call := pkg.ToolCall{ID: "get-2", Name: "homeassistant.get_state", Parameters: params}
+	call := pkg.ToolCall{ID: "get-2", Name: "homeassistant_get_state", Parameters: params}
 
 	result, err := h.Execute(context.Background(), call)
 	if err != nil {
@@ -147,7 +147,7 @@ func TestHA_GetState_MissingEntityID(t *testing.T) {
 func TestHA_SetState_MissingDomain(t *testing.T) {
 	h := homeassistant.NewHASetState("http://localhost:8123", "token")
 	params, _ := json.Marshal(map[string]string{"service": "turn_on"})
-	call := pkg.ToolCall{ID: "set-2", Name: "homeassistant.set_state", Parameters: params}
+	call := pkg.ToolCall{ID: "set-2", Name: "homeassistant_set_state", Parameters: params}
 
 	result, err := h.Execute(context.Background(), call)
 	if err != nil {
@@ -170,7 +170,7 @@ func TestHA_GetState_HTTPError(t *testing.T) {
 	h := homeassistant.NewHAGetState(srv.URL, "bad-token")
 	h.SetHTTPClient(srv.Client())
 	params, _ := json.Marshal(map[string]string{"entity_id": "sensor.temp"})
-	call := pkg.ToolCall{ID: "get-3", Name: "homeassistant.get_state", Parameters: params}
+	call := pkg.ToolCall{ID: "get-3", Name: "homeassistant_get_state", Parameters: params}
 
 	result, err := h.Execute(context.Background(), call)
 	if err != nil {

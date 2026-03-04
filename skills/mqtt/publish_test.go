@@ -19,8 +19,8 @@ func TestMQTTPublish_Definition(t *testing.T) {
 	mp := mqtt.NewMQTTPublish(nil)
 	def := mp.Definition()
 
-	if def.Name != "mqtt.publish" {
-		t.Errorf("expected name %q, got %q", "mqtt.publish", def.Name)
+	if def.Name != "mqtt_publish" {
+		t.Errorf("expected name %q, got %q", "mqtt_publish", def.Name)
 	}
 	if def.Tier != pkg.TierTrusted {
 		t.Errorf("expected TierTrusted, got %d", def.Tier)
@@ -75,7 +75,7 @@ func TestMQTTPublish_Execute(t *testing.T) {
 		"topic":   "home/lights/living",
 		"payload": "on",
 	})
-	call := pkg.ToolCall{ID: "pub-1", Name: "mqtt.publish", Parameters: params}
+	call := pkg.ToolCall{ID: "pub-1", Name: "mqtt_publish", Parameters: params}
 
 	result, err := mp.Execute(context.Background(), call)
 	if err != nil {
@@ -102,7 +102,7 @@ func TestMQTTPublish_Execute_NilBus(t *testing.T) {
 		"topic":   "test/topic",
 		"payload": "hello",
 	})
-	call := pkg.ToolCall{ID: "pub-2", Name: "mqtt.publish", Parameters: params}
+	call := pkg.ToolCall{ID: "pub-2", Name: "mqtt_publish", Parameters: params}
 
 	result, err := mp.Execute(context.Background(), call)
 	if err != nil {
@@ -124,7 +124,7 @@ func TestMQTTPublish_Execute_BusError(t *testing.T) {
 		"topic":   "test/topic",
 		"payload": "data",
 	})
-	call := pkg.ToolCall{ID: "pub-3", Name: "mqtt.publish", Parameters: params}
+	call := pkg.ToolCall{ID: "pub-3", Name: "mqtt_publish", Parameters: params}
 
 	result, err := mp.Execute(context.Background(), call)
 	if err != nil {
@@ -143,7 +143,7 @@ func TestMQTTPublish_Execute_MissingTopic(t *testing.T) {
 	mp := mqtt.NewMQTTPublish(bus)
 
 	params, _ := json.Marshal(map[string]string{"payload": "data"})
-	call := pkg.ToolCall{ID: "pub-4", Name: "mqtt.publish", Parameters: params}
+	call := pkg.ToolCall{ID: "pub-4", Name: "mqtt_publish", Parameters: params}
 
 	result, err := mp.Execute(context.Background(), call)
 	if err != nil {
@@ -162,7 +162,7 @@ func TestMQTTPublish_Execute_MissingPayload(t *testing.T) {
 	mp := mqtt.NewMQTTPublish(bus)
 
 	params, _ := json.Marshal(map[string]string{"topic": "test/topic"})
-	call := pkg.ToolCall{ID: "pub-5", Name: "mqtt.publish", Parameters: params}
+	call := pkg.ToolCall{ID: "pub-5", Name: "mqtt_publish", Parameters: params}
 
 	result, err := mp.Execute(context.Background(), call)
 	if err != nil {

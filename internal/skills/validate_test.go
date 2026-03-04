@@ -28,17 +28,17 @@ func TestValidateRequirements_MissingEnv(t *testing.T) {
 }
 
 func TestValidateRequirements_MissingTool(t *testing.T) {
-	req := SkillRequirements{Tools: []string{"web.search"}}
+	req := SkillRequirements{Tools: []string{"web_search"}}
 	// No registered tools
 	missing := ValidateRequirements(req, nil)
-	if len(missing) != 1 || missing[0] != "tool:web.search" {
-		t.Errorf("expected [tool:web.search], got %v", missing)
+	if len(missing) != 1 || missing[0] != "tool:web_search" {
+		t.Errorf("expected [tool:web_search], got %v", missing)
 	}
 }
 
 func TestValidateRequirements_ToolPresent(t *testing.T) {
-	req := SkillRequirements{Tools: []string{"web.search"}}
-	registered := map[string]bool{"web.search": true}
+	req := SkillRequirements{Tools: []string{"web_search"}}
+	registered := map[string]bool{"web_search": true}
 	missing := ValidateRequirements(req, registered)
 	if len(missing) != 0 {
 		t.Errorf("expected no missing, got %v", missing)

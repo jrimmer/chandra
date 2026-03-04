@@ -62,12 +62,12 @@ func TestRegistry_RegisterAndGet(t *testing.T) {
 	reg, err := tools.NewRegistry(nil)
 	require.NoError(t, err)
 
-	tool := newStubTool("homeassistant.get_state")
+	tool := newStubTool("homeassistant_get_state")
 	require.NoError(t, reg.Register(tool))
 
-	got, ok := reg.Get("homeassistant.get_state")
+	got, ok := reg.Get("homeassistant_get_state")
 	require.True(t, ok)
-	assert.Equal(t, "homeassistant.get_state", got.Definition().Name)
+	assert.Equal(t, "homeassistant_get_state", got.Definition().Name)
 
 	_, ok = reg.Get("nonexistent")
 	assert.False(t, ok)
@@ -77,10 +77,10 @@ func TestRegistry_Register_DuplicateReturnsError(t *testing.T) {
 	reg, err := tools.NewRegistry(nil)
 	require.NoError(t, err)
 
-	tool := newStubTool("my.tool")
+	tool := newStubTool("my_tool")
 	require.NoError(t, reg.Register(tool))
 
-	err = reg.Register(newStubTool("my.tool"))
+	err = reg.Register(newStubTool("my_tool"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already registered")
 }
@@ -89,9 +89,9 @@ func TestRegistry_All_ReturnsDefinitions(t *testing.T) {
 	reg, err := tools.NewRegistry(nil)
 	require.NoError(t, err)
 
-	require.NoError(t, reg.Register(newStubTool("tool.a")))
-	require.NoError(t, reg.Register(newStubTool("tool.b")))
-	require.NoError(t, reg.Register(newStubTool("tool.c")))
+	require.NoError(t, reg.Register(newStubTool("tool_a")))
+	require.NoError(t, reg.Register(newStubTool("tool_b")))
+	require.NoError(t, reg.Register(newStubTool("tool_c")))
 
 	defs := reg.All()
 	assert.Len(t, defs, 3)
@@ -100,19 +100,19 @@ func TestRegistry_All_ReturnsDefinitions(t *testing.T) {
 	for _, d := range defs {
 		names[d.Name] = true
 	}
-	assert.True(t, names["tool.a"])
-	assert.True(t, names["tool.b"])
-	assert.True(t, names["tool.c"])
+	assert.True(t, names["tool_a"])
+	assert.True(t, names["tool_b"])
+	assert.True(t, names["tool_c"])
 }
 
 func TestRegistry_EnforceCapabilities_AllowsDeclared(t *testing.T) {
 	reg, err := tools.NewRegistry(nil)
 	require.NoError(t, err)
 
-	tool := newStubTool("ha.read", pkg.CapMemoryRead, pkg.CapNetworkOut)
+	tool := newStubTool("ha_read", pkg.CapMemoryRead, pkg.CapNetworkOut)
 	require.NoError(t, reg.Register(tool))
 
-	call := pkg.ToolCall{ID: "c1", Name: "ha.read"}
+	call := pkg.ToolCall{ID: "c1", Name: "ha_read"}
 
 	err = reg.EnforceCapabilities(call)
 	assert.NoError(t, err)
@@ -122,7 +122,7 @@ func TestRegistry_EnforceCapabilities_UnknownToolReturnsError(t *testing.T) {
 	reg, err := tools.NewRegistry(nil)
 	require.NoError(t, err)
 
-	call := pkg.ToolCall{ID: "c3", Name: "unknown.tool"}
+	call := pkg.ToolCall{ID: "c3", Name: "unknown_tool"}
 	err = reg.EnforceCapabilities(call)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown tool")
@@ -135,9 +135,9 @@ func TestRegistry_RequiresConfirmation_MatchesPattern(t *testing.T) {
 	reg, err := tools.NewRegistry(rules)
 	require.NoError(t, err)
 
-	require.NoError(t, reg.Register(newStubTool("homeassistant.delete_entity")))
+	require.NoError(t, reg.Register(newStubTool("homeassistant_delete_entity")))
 
-	call := pkg.ToolCall{ID: "c4", Name: "homeassistant.delete_entity"}
+	call := pkg.ToolCall{ID: "c4", Name: "homeassistant_delete_entity"}
 	matched, rule := reg.RequiresConfirmation(call)
 	assert.True(t, matched)
 	assert.Equal(t, ".*delete.*", rule.Pattern)
@@ -152,9 +152,9 @@ func TestRegistry_RequiresConfirmation_NoMatch(t *testing.T) {
 	reg, err := tools.NewRegistry(rules)
 	require.NoError(t, err)
 
-	require.NoError(t, reg.Register(newStubTool("homeassistant.get_state")))
+	require.NoError(t, reg.Register(newStubTool("homeassistant_get_state")))
 
-	call := pkg.ToolCall{ID: "c5", Name: "homeassistant.get_state"}
+	call := pkg.ToolCall{ID: "c5", Name: "homeassistant_get_state"}
 	matched, rule := reg.RequiresConfirmation(call)
 	assert.False(t, matched)
 	assert.Equal(t, tools.ConfirmationRule{}, rule)
@@ -173,10 +173,10 @@ func TestRegistry_EnforceCapabilities_TrustedTool_WithCaps(t *testing.T) {
 	reg, err := tools.NewRegistry(nil)
 	require.NoError(t, err)
 
-	tool := newStubTrustedTool("trusted.read", pkg.CapMemoryRead)
+	tool := newStubTrustedTool("trusted_read", pkg.CapMemoryRead)
 	require.NoError(t, reg.Register(tool))
 
-	call := pkg.ToolCall{ID: "c10", Name: "trusted.read"}
+	call := pkg.ToolCall{ID: "c10", Name: "trusted_read"}
 	err = reg.EnforceCapabilities(call)
 	assert.NoError(t, err, "TrustedTool with declared capabilities should pass")
 }
@@ -186,10 +186,10 @@ func TestRegistry_EnforceCapabilities_TrustedTool_EmptyCaps(t *testing.T) {
 	require.NoError(t, err)
 
 	// Register a TrustedTool with no declared capabilities — should fail enforcement.
-	tool := newStubTrustedTool("trusted.empty")
+	tool := newStubTrustedTool("trusted_empty")
 	require.NoError(t, reg.Register(tool))
 
-	call := pkg.ToolCall{ID: "c11", Name: "trusted.empty"}
+	call := pkg.ToolCall{ID: "c11", Name: "trusted_empty"}
 	err = reg.EnforceCapabilities(call)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no declared capabilities")

@@ -20,8 +20,8 @@ func TestWebSearch_Definition(t *testing.T) {
 	ws := web.NewWebSearch()
 	def := ws.Definition()
 
-	if def.Name != "web.search" {
-		t.Errorf("expected name %q, got %q", "web.search", def.Name)
+	if def.Name != "web_search" {
+		t.Errorf("expected name %q, got %q", "web_search", def.Name)
 	}
 	if def.Tier != pkg.TierTrusted {
 		t.Errorf("expected TierTrusted (%d), got %d", pkg.TierTrusted, def.Tier)
@@ -79,7 +79,7 @@ func TestWebSearch_Execute_MockHTTP(t *testing.T) {
 	params, _ := json.Marshal(map[string]string{"query": "golang"})
 	call := pkg.ToolCall{
 		ID:         "call-1",
-		Name:       "web.search",
+		Name:       "web_search",
 		Parameters: params,
 	}
 
@@ -108,7 +108,7 @@ func TestWebSearch_Execute_HTTPError(t *testing.T) {
 	params, _ := json.Marshal(map[string]string{"query": "fail"})
 	call := pkg.ToolCall{
 		ID:         "call-2",
-		Name:       "web.search",
+		Name:       "web_search",
 		Parameters: params,
 	}
 
@@ -127,7 +127,7 @@ func TestWebSearch_Execute_MissingQuery(t *testing.T) {
 	params, _ := json.Marshal(map[string]string{})
 	call := pkg.ToolCall{
 		ID:         "call-3",
-		Name:       "web.search",
+		Name:       "web_search",
 		Parameters: params,
 	}
 
@@ -159,7 +159,7 @@ func TestWebSearch_Execute_TruncatesLongResponse(t *testing.T) {
 	params, _ := json.Marshal(map[string]string{"query": "long"})
 	call := pkg.ToolCall{
 		ID:         "call-4",
-		Name:       "web.search",
+		Name:       "web_search",
 		Parameters: params,
 	}
 

@@ -228,7 +228,7 @@ func TestSemanticStore_ImportanceHeuristic(t *testing.T) {
 		want        float32
 	}{
 		{"explicit reinforcement", "remember: always use UTC", false, 0.8},
-		{"tool call turn", "Called homeassistant.get_state", true, 0.6},
+		{"tool call turn", "Called homeassistant_get_state", true, 0.6},
 		{"substantive exchange >200 tokens", strings.Repeat("word ", 201), false, 0.6},
 		{"default conversation", "sounds good, thanks", false, 0.5},
 	}

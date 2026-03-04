@@ -339,6 +339,12 @@ func validate(cfg *Config) error {
 		!strings.HasPrefix(cfg.Provider.BaseURL, "https://") {
 		errs = append(errs, "provider.base_url must use HTTPS for custom endpoints")
 	}
+	// Guard against the common mistake of including /v1 in the Anthropic base URL.
+	// The Anthropic SDK appends /v1/messages itself; a trailing /v1 produces
+	// https://api.anthropic.com/v1/v1/messages which returns 404.
+	if cfg.Provider.Type == "anthropic" && strings.HasSuffix(strings.TrimRight(cfg.Provider.BaseURL, "/"), "/v1") {
+		errs = append(errs, "provider.base_url for anthropic must not include /v1 — the SDK appends it automatically (use https://api.anthropic.com)")
+	}
 	if cfg.Database.Path == "" {
 		errs = append(errs, "database.path is required")
 	}

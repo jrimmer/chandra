@@ -99,16 +99,16 @@ func TestExecutor_ParallelDispatch(t *testing.T) {
 	// Register three slow tools (each takes 50ms).
 	reg, err := tools.NewRegistry(nil)
 	require.NoError(t, err)
-	for _, name := range []string{"tool.a", "tool.b", "tool.c"} {
+	for _, name := range []string{"tool_a", "tool_b", "tool_c"} {
 		require.NoError(t, reg.Register(&slowTool{name: name, sleep: 50 * time.Millisecond}))
 	}
 
 	exec := tools.NewExecutor(reg, db, 5*time.Second)
 
 	calls := []pkg.ToolCall{
-		{ID: "1", Name: "tool.a"},
-		{ID: "2", Name: "tool.b"},
-		{ID: "3", Name: "tool.c"},
+		{ID: "1", Name: "tool_a"},
+		{ID: "2", Name: "tool_b"},
+		{ID: "3", Name: "tool_c"},
 	}
 
 	start := time.Now()
@@ -127,13 +127,13 @@ func TestExecutor_RetriesTransientErrors(t *testing.T) {
 	db := newTestDB(t)
 
 	// Tool fails twice then succeeds on 3rd attempt.
-	tool := &countingTransientTool{name: "retry.tool", failTimes: 2}
+	tool := &countingTransientTool{name: "retry_tool", failTimes: 2}
 	reg := newRegistryWithTool(t, tool)
 
 	// Use short timeout so retries don't slow down the test much.
 	exec := tools.NewExecutor(reg, db, 5*time.Second)
 
-	results := exec.Execute(context.Background(), []pkg.ToolCall{{ID: "r1", Name: "retry.tool"}})
+	results := exec.Execute(context.Background(), []pkg.ToolCall{{ID: "r1", Name: "retry_tool"}})
 	require.Len(t, results, 1)
 
 	assert.Nil(t, results[0].Error, "should eventually succeed")
@@ -144,12 +144,12 @@ func TestExecutor_RetriesTransientErrors(t *testing.T) {
 func TestExecutor_NoRetryOnBadInput(t *testing.T) {
 	db := newTestDB(t)
 
-	tool := &badInputTool{name: "bad.tool"}
+	tool := &badInputTool{name: "bad_tool"}
 	reg := newRegistryWithTool(t, tool)
 
 	exec := tools.NewExecutor(reg, db, 5*time.Second)
 
-	results := exec.Execute(context.Background(), []pkg.ToolCall{{ID: "b1", Name: "bad.tool"}})
+	results := exec.Execute(context.Background(), []pkg.ToolCall{{ID: "b1", Name: "bad_tool"}})
 	require.Len(t, results, 1)
 
 	assert.NotNil(t, results[0].Error, "should have error")
@@ -160,13 +160,13 @@ func TestExecutor_Timeout(t *testing.T) {
 	db := newTestDB(t)
 
 	// Tool sleeps 5s but timeout is 100ms.
-	tool := &slowTool{name: "slow.tool", sleep: 5 * time.Second}
+	tool := &slowTool{name: "slow_tool", sleep: 5 * time.Second}
 	reg := newRegistryWithTool(t, tool)
 
 	exec := tools.NewExecutor(reg, db, 100*time.Millisecond)
 
 	start := time.Now()
-	results := exec.Execute(context.Background(), []pkg.ToolCall{{ID: "t1", Name: "slow.tool"}})
+	results := exec.Execute(context.Background(), []pkg.ToolCall{{ID: "t1", Name: "slow_tool"}})
 	elapsed := time.Since(start)
 
 	require.Len(t, results, 1)
@@ -177,19 +177,19 @@ func TestExecutor_Timeout(t *testing.T) {
 func TestExecutor_RecordsTelemetry(t *testing.T) {
 	db := newTestDB(t)
 
-	tool := &slowTool{name: "telemetry.tool", sleep: 0}
+	tool := &slowTool{name: "telemetry_tool", sleep: 0}
 	reg := newRegistryWithTool(t, tool)
 
 	exec := tools.NewExecutor(reg, db, 5*time.Second)
-	exec.Execute(context.Background(), []pkg.ToolCall{{ID: "tel1", Name: "telemetry.tool"}})
+	exec.Execute(context.Background(), []pkg.ToolCall{{ID: "tel1", Name: "telemetry_tool"}})
 
 	var count int
-	err := db.QueryRow(`SELECT COUNT(*) FROM tool_telemetry WHERE tool_name = 'telemetry.tool'`).Scan(&count)
+	err := db.QueryRow(`SELECT COUNT(*) FROM tool_telemetry WHERE tool_name = 'telemetry_tool'`).Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count, "should have recorded one telemetry row")
 
 	var success int
-	err = db.QueryRow(`SELECT success FROM tool_telemetry WHERE tool_name = 'telemetry.tool'`).Scan(&success)
+	err = db.QueryRow(`SELECT success FROM tool_telemetry WHERE tool_name = 'telemetry_tool'`).Scan(&success)
 	require.NoError(t, err)
 	assert.Equal(t, 1, success, "should be recorded as successful")
 }

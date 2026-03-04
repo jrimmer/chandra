@@ -56,12 +56,21 @@ func NewRegistry(confirmRules []ConfirmationRule) (*registry, error) {
 	return &registry{confirmRules: compiled}, nil
 }
 
+// toolNameRe is the pattern required by Anthropic (and compatible with OpenAI).
+// Dots, spaces, and other punctuation are rejected at registration time so the
+// error is caught at startup, not at the first API call.
+var toolNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
+
 // Register adds a tool to the registry. Returns an error if a tool with the
-// same name is already registered.
+// same name is already registered or the name does not match the required
+// pattern (alphanumeric, underscore, hyphen, 1–128 chars).
 func (r *registry) Register(tool pkg.Tool) error {
 	def := tool.Definition()
 	if def.Name == "" {
 		return fmt.Errorf("tools/registry: tool has empty name")
+	}
+	if !toolNameRe.MatchString(def.Name) {
+		return fmt.Errorf("tools/registry: tool name %q is invalid (must match ^[a-zA-Z0-9_-]{1,128}$) — use underscores not dots", def.Name)
 	}
 	if _, loaded := r.tools.LoadOrStore(def.Name, tool); loaded {
 		return fmt.Errorf("tools/registry: tool %q already registered", def.Name)

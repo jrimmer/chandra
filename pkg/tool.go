@@ -26,7 +26,7 @@ const (
 )
 
 type ToolDef struct {
-	Name         string          // unique identifier, e.g. "homeassistant.set_state"
+	Name         string          // unique identifier, e.g. "homeassistant_set_state"
 	Description  string          // shown to LLM in tool selection
 	Parameters   json.RawMessage // JSON Schema describing input parameters
 	Tier         ToolTier

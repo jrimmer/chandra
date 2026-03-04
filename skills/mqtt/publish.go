@@ -28,11 +28,11 @@ func NewMQTTPublish(bus EventBus) *MQTTPublish {
 	return &MQTTPublish{bus: bus}
 }
 
-// Definition returns the ToolDef for the mqtt.publish skill.
+// Definition returns the ToolDef for the mqtt_publish skill.
 func (mp *MQTTPublish) Definition() pkg.ToolDef {
 	params := json.RawMessage(`{"type":"object","properties":{"topic":{"type":"string"},"payload":{"type":"string"}},"required":["topic","payload"]}`)
 	return pkg.ToolDef{
-		Name:         "mqtt.publish",
+		Name:         "mqtt_publish",
 		Description:  "Publish a message to an MQTT topic via the event bus",
 		Tier:         pkg.TierTrusted,
 		Capabilities: []pkg.Capability{pkg.CapNetworkOut},

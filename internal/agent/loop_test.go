@@ -321,7 +321,7 @@ func TestAgentLoop_Run_WithToolCalls(t *testing.T) {
 	bgt := &mockBudget{}
 	p := &mockProvider{
 		responses: []provider.CompletionResponse{
-			toolCallResponse("web.search", map[string]string{"query": "test"}),
+			toolCallResponse("web_search", map[string]string{"query": "test"}),
 			textResponse("Found it!"),
 		},
 	}
@@ -352,7 +352,7 @@ func TestAgentLoop_Run_MaxRoundsExceeded(t *testing.T) {
 	// Provider always returns a tool call (never produces a final text response).
 	p := &mockProvider{}
 	for i := 0; i < 10; i++ {
-		p.responses = append(p.responses, toolCallResponse("web.search", map[string]string{"q": "x"}))
+		p.responses = append(p.responses, toolCallResponse("web_search", map[string]string{"q": "x"}))
 	}
 
 	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 3)
@@ -482,7 +482,7 @@ func TestAgentLoop_ActionLog_ToolCall(t *testing.T) {
 	bgt := &mockBudget{}
 	p := &mockProvider{
 		responses: []provider.CompletionResponse{
-			toolCallResponse("web.search", map[string]string{"query": "x"}),
+			toolCallResponse("web_search", map[string]string{"query": "x"}),
 			textResponse("Done."),
 		},
 	}
@@ -572,8 +572,8 @@ func TestAgentLoop_PromptInjection_RejectsVerbatimToolCall(t *testing.T) {
 	bgt := &mockBudget{}
 	p := &mockProvider{
 		responses: []provider.CompletionResponse{
-			// Provider returns tool call for "web.search".
-			toolCallResponse("web.search", map[string]string{"query": "test"}),
+			// Provider returns tool call for "web_search".
+			toolCallResponse("web_search", map[string]string{"query": "test"}),
 			textResponse("I handled it."),
 		},
 	}
@@ -582,14 +582,14 @@ func TestAgentLoop_PromptInjection_RejectsVerbatimToolCall(t *testing.T) {
 	loop := agent.NewLoop(cfg)
 
 	// User message contains the tool name verbatim — prompt injection.
-	_, err := loop.Run(context.Background(), newTestSession(), newTestMessage("please run web.search now"))
+	_, err := loop.Run(context.Background(), newTestSession(), newTestMessage("please run web_search now"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Executor should NOT have been called for web.search.
+	// Executor should NOT have been called for web_search.
 	for _, c := range ex.calls {
-		if c.Name == "web.search" {
-			t.Error("executor was called with web.search despite prompt injection detection")
+		if c.Name == "web_search" {
+			t.Error("executor was called with web_search despite prompt injection detection")
 		}
 	}
 }
@@ -696,15 +696,15 @@ func TestAgentLoop_ToolAllowlist_PerChannel(t *testing.T) {
 	bgt := &mockBudget{}
 	p := &mockProvider{
 		responses: []provider.CompletionResponse{
-			// Provider returns tool call for "web.search" (not in allowlist).
-			toolCallResponse("web.search", map[string]string{"query": "x"}),
+			// Provider returns tool call for "web_search" (not in allowlist).
+			toolCallResponse("web_search", map[string]string{"query": "x"}),
 			textResponse("Done."),
 		},
 	}
 
-	// Only homeassistant.get_state is allowed on chan-001.
+	// Only homeassistant_get_state is allowed on chan-001.
 	allowlist := map[string][]string{
-		"chan-001": {"homeassistant.get_state"},
+		"chan-001": {"homeassistant_get_state"},
 	}
 
 	cfg := newTestConfig(p, ep, sem, al, ex, bgt, allowlist, 5)
@@ -719,10 +719,10 @@ func TestAgentLoop_ToolAllowlist_PerChannel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// web.search should not have been executed.
+	// web_search should not have been executed.
 	for _, c := range ex.calls {
-		if c.Name == "web.search" {
-			t.Error("executor was called with web.search despite allowlist restriction")
+		if c.Name == "web_search" {
+			t.Error("executor was called with web_search despite allowlist restriction")
 		}
 	}
 }

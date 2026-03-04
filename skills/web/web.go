@@ -48,7 +48,7 @@ func (ws *WebSearch) SetHTTPClient(c *http.Client) {
 func (ws *WebSearch) Definition() pkg.ToolDef {
 	params := json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`)
 	return pkg.ToolDef{
-		Name:         "web.search",
+		Name:         "web_search",
 		Description:  "Search the web for information",
 		Tier:         pkg.TierTrusted,
 		Capabilities: []pkg.Capability{pkg.CapNetworkOut},

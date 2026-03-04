@@ -196,7 +196,7 @@ func run(ctx context.Context, safeMode bool) error {
 	}
 
 	if err := registry.Register(webskill.NewWebSearch()); err != nil {
-		slog.Warn("chandrad: register web.search failed", "err", err)
+		slog.Warn("chandrad: register web_search failed", "err", err)
 	}
 
 	// read_skill is registered after skillReg is initialized (Step 5b below).
