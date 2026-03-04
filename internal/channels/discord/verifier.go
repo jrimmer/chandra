@@ -60,7 +60,7 @@ func RunLoopTest(ctx context.Context, token, channelID string, opts VerifyOption
 
 	// Register handler before opening so we don't miss fast replies.
 	sess.AddHandler(func(s *discordgo.Session, m *discordgo.MessageCreate) {
-		if m.Author == nil || m.Author.Bot {
+		if m.Author == nil {
 			return
 		}
 		// Match reply to our specific sent message.
