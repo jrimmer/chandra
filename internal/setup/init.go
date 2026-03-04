@@ -970,12 +970,15 @@ func persistChannelVerified(dbPath, channelID, userID string) error {
 // loop success — the Hello World reply bootstraps the allowlist automatically
 // (design §346: "The Hello World reply bootstraps the allowlist — no manual ID lookup needed").
 func addUserToAllowlist(dbPath, channelID, userID, username string) error {
-	db, err := sql.Open("sqlite3", dbPath)
+	st, err := store.NewDB(dbPath)
 	if err != nil {
 		return err
 	}
-	defer db.Close()
-	_, err = db.Exec(
+	defer st.Close()
+	if err := st.Migrate(); err != nil {
+		return err
+	}
+	_, err = st.DB().Exec(
 		`INSERT OR IGNORE INTO allowed_users (channel_id, user_id, username, source, added_at) VALUES (?, ?, ?, 'hello_world', ?)`,
 		channelID, userID, username, time.Now().Unix(),
 	)

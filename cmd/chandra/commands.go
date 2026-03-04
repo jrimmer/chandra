@@ -523,18 +523,51 @@ var channelTestCmd = &cobra.Command{
 		if err := persistVerification(dbPath, channelID, result.ReplyUserID); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not persist verification: %v\n", err)
 		}
+
+		// Prompt to add the replying user to allowed_users so the daemon can start.
+		fmt.Printf("\n  Add %s to authorized users? [Y/n] ", result.ReplyUsername)
+		var answer string
+		fmt.Scanln(&answer)
+		if answer == "" || answer == "y" || answer == "Y" {
+			if err := addAllowedUser(dbPath, channelID, result.ReplyUserID, result.ReplyUsername); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not add user to allowlist: %v\n", err)
+			} else {
+				fmt.Printf("  ✓ %s added to authorized users.\n", result.ReplyUsername)
+			}
+		}
 	},
 }
 
-// persistVerification writes the loop test result to the channel_verifications table.
-func persistVerification(dbPath, channelID, userID string) error {
-	db, err := sql.Open("sqlite3", dbPath)
+// addAllowedUser writes a user to allowed_users, running migrations first if needed.
+func addAllowedUser(dbPath, channelID, userID, username string) error {
+	st, err := store.NewDB(dbPath)
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer st.Close()
+	if err := st.Migrate(); err != nil {
+		return err
+	}
+	_, err = st.DB().Exec(
+		`INSERT OR IGNORE INTO allowed_users (channel_id, user_id, username, source, added_at) VALUES (?, ?, ?, 'hello_world', ?)`,
+		channelID, userID, username, time.Now().Unix(),
+	)
+	return err
+}
 
-	_, err = db.Exec(
+// persistVerification writes the loop test result to the channel_verifications table.
+// Uses store.NewDB + Migrate so the schema is guaranteed to exist even when
+// called before chandrad has started for the first time.
+func persistVerification(dbPath, channelID, userID string) error {
+	st, err := store.NewDB(dbPath)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	if err := st.Migrate(); err != nil {
+		return err
+	}
+	_, err = st.DB().Exec(
 		`INSERT OR REPLACE INTO channel_verifications (channel_id, verified_at, verified_user_id) VALUES (?, ?, ?)`,
 		channelID, time.Now().Unix(), userID,
 	)
