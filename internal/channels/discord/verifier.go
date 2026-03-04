@@ -3,6 +3,7 @@ package discord
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -29,6 +30,16 @@ type VerifyResult struct {
 	MessageID     string // the sent message ID
 }
 
+// normaliseBotToken ensures the token has the "Bot " prefix required by
+// discordgo. Discord bot tokens must be sent as "Bot <token>" in the
+// Authorization header; discordgo does not add this prefix automatically.
+func normaliseBotToken(token string) string {
+	if !strings.HasPrefix(token, "Bot ") {
+		return "Bot " + token
+	}
+	return token
+}
+
 // RunLoopTest sends a message to channelID, waits for a reply (matched by
 // parent message ID), and returns the replying user's ID and name.
 // The caller is responsible for writing the result to the DB.
@@ -36,6 +47,7 @@ type VerifyResult struct {
 // token is the Discord bot token.
 // channelID is the Discord channel ID to send the test message to.
 func RunLoopTest(ctx context.Context, token, channelID string, opts VerifyOptions) (*VerifyResult, error) {
+	token = normaliseBotToken(token)
 	sess, err := discordgo.New(token)
 	if err != nil {
 		return nil, fmt.Errorf("discord: create session: %w", err)

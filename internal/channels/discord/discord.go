@@ -70,6 +70,7 @@ func NewDiscord(token string, channelIDs []string) (*Discord, error) {
 	if token == "" {
 		return nil, errors.New("discord: token must not be empty")
 	}
+	token = normaliseBotToken(token)
 
 	session, err := discordgo.New(token)
 	if err != nil {
