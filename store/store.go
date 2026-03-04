@@ -26,6 +26,24 @@ func NewDB(path string) (*Store, error) {
 		return nil, fmt.Errorf("create db directory: %w", err)
 	}
 
+	// Create the DB file at 0600 if it doesn't exist.
+	// sql.Open does not let us control the creation mode, so we pre-create
+	// the file ourselves to avoid a window where it exists at the OS default umask.
+	if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+		f, createErr := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if createErr != nil && !os.IsExist(createErr) {
+			return nil, fmt.Errorf("create database file: %w", createErr)
+		}
+		if f != nil {
+			f.Close()
+		}
+	} else if statErr == nil {
+		// File exists — verify permissions are 0600 and tighten if not.
+		if err := os.Chmod(path, 0600); err != nil {
+			return nil, fmt.Errorf("set database permissions: %w", err)
+		}
+	}
+
 	db, err := sql.Open("sqlite3", path+"?_journal_mode=WAL&_foreign_keys=1&_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)

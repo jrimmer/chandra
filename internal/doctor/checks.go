@@ -130,6 +130,21 @@ func (c *dbCheck) Run(ctx context.Context) Result {
 			Fix:    "run: chandra db check",
 		}
 	}
+
+	// Verify migrations have actually been applied by checking required tables exist.
+	// An empty DB passes integrity_check, so we must verify schema separately.
+	var tableCount int
+	err = db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('episodes', 'allowed_users', 'channel_verifications')`,
+	).Scan(&tableCount)
+	if err != nil || tableCount < 3 {
+		return Result{
+			Status: Fail,
+			Detail: fmt.Sprintf("migrations not applied (found %d/3 required tables)", tableCount),
+			Fix:    "run: chandra init",
+		}
+	}
+
 	return Result{Status: Pass, Detail: "accessible, integrity ok, migrations current"}
 }
 
