@@ -170,7 +170,15 @@ func (c *providerCheck) Run(ctx context.Context) Result {
 	}
 
 	client := &http.Client{Timeout: 8 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.BaseURL+"/models", nil)
+	// Anthropic base_url is the root (https://api.anthropic.com); SDK appends /v1
+	// itself, but the doctor constructs the path manually.  All OpenAI-compatible
+	// providers (openai, openrouter, ollama, custom) use base_url/models directly
+	// because their base_url already includes /v1.
+	modelsPath := c.cfg.BaseURL + "/models"
+	if c.cfg.Type == "anthropic" {
+		modelsPath = c.cfg.BaseURL + "/v1/models"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsPath, nil)
 	if err != nil {
 		return Result{Status: Fail, Detail: fmt.Sprintf("build request: %v", err)}
 	}

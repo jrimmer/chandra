@@ -457,6 +457,25 @@ func run(ctx context.Context, safeMode bool) error {
 					if !ok {
 						return
 					}
+
+					// Per-message access control: check policy and allowed_users table.
+					policy := cfg.Channels.Discord.AccessPolicy
+					if policy == "" {
+						policy = "invite" // default: closed
+					}
+					if policy != "open" {
+						var allowed bool
+						_ = db.QueryRowContext(ctx,
+							`SELECT COUNT(*) > 0 FROM allowed_users WHERE channel_id = ? AND user_id = ?`,
+							msg.ChannelID, msg.UserID,
+						).Scan(&allowed)
+						if !allowed {
+							slog.Warn("chandrad: discord: unauthorized user; dropping message",
+								"user_id", msg.UserID, "channel_id", msg.ChannelID, "policy", policy)
+							continue
+						}
+					}
+
 					sess, sessErr := sessionMgr.GetOrCreate(ctx, msg.ConversationID, msg.ChannelID, msg.UserID)
 					if sessErr != nil {
 						slog.Error("chandrad: discord: session error", "err", sessErr)
