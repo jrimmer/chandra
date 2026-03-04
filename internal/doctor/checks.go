@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jrimmer/chandra/internal/api"
 	"github.com/jrimmer/chandra/internal/config"
 )
 
@@ -346,8 +347,7 @@ type daemonCheck struct {
 // Uses net.Dial to distinguish a responsive daemon from a stale socket file.
 func NewDaemonCheck(socketPath string) Check {
 	if socketPath == "" {
-		home, _ := os.UserHomeDir()
-		socketPath = filepath.Join(home, ".config", "chandra", "chandra.sock")
+		socketPath = api.SocketPath()
 	}
 	return &daemonCheck{socketPath: socketPath}
 }
