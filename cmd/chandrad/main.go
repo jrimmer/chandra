@@ -108,39 +108,8 @@ func run(ctx context.Context, safeMode bool) error {
 		}
 	}
 
-	// Step 2b: Security default — deny-all: an enabled Discord channel with no
-	// authorized users is a misconfiguration (design §12).
-	// Policy-specific rules:
-	// - "open": intentionally unrestricted, skip check (doctor will warn)
-	// - "role": access via Discord roles — check allowed_roles in config
-	// - all others: query the allowed_users DB table (authoritative source)
-	if !safeMode && cfg.Channels.Discord != nil && cfg.Channels.Discord.BotToken != "" {
-		switch cfg.Channels.Discord.AccessPolicy {
-		case "open":
-			// intentionally open — skip allowlist check (doctor warns)
-		case "role":
-			if len(cfg.Channels.Discord.AllowedRoles) == 0 {
-				return fmt.Errorf("chandrad: security: access_policy=role but allowed_roles is empty — add role IDs: chandra access add discord --role <role-id>")
-			}
-		default: // invite, request, allowlist — DB is authoritative
-			// Sum allowed users across all configured channel IDs.
-			// The DB keys allowed_users by real Discord channel ID, not adapter name.
-			var totalUsers int
-			for _, chID := range cfg.Channels.Discord.ChannelIDs {
-				n, err := countDBAllowedUsers(cfg.Database.Path, chID)
-				if err != nil {
-					return fmt.Errorf("chandrad: security: DB query for channel %s: %v", chID, err)
-				}
-				totalUsers += n
-			}
-			if totalUsers == 0 {
-				return fmt.Errorf("chandrad: security: no authorized users in DB — the bot would lock everyone out. Run 'chandra channel test discord' or: chandra access add discord <user-id>")
-			}
-		}
-	}
-
 	// -------------------------------------------------------------------
-	// Step 3: Open database + run migrations.
+	// Step 2b: Open database + run migrations (must precede security check).
 	// -------------------------------------------------------------------
 	dbPath := cfg.Database.Path
 	if dbPath == "" {
@@ -159,6 +128,37 @@ func run(ctx context.Context, safeMode bool) error {
 	}
 	db := st.DB()
 	slog.Info("chandrad: database ready", "path", dbPath)
+
+	// Step 2c: Security default (runs after DB is open and migrated) — deny-all: an enabled Discord channel with no
+	// authorized users is a misconfiguration (design §12).
+	// Policy-specific rules:
+	// - "open": intentionally unrestricted, skip check (doctor will warn)
+	// - "role": access via Discord roles — check allowed_roles in config
+	// - all others: query the allowed_users DB table (authoritative source)
+	if !safeMode && cfg.Channels.Discord != nil && cfg.Channels.Discord.BotToken != "" {
+		switch cfg.Channels.Discord.AccessPolicy {
+		case "open":
+			// intentionally open — skip allowlist check (doctor warns)
+		case "role":
+			if len(cfg.Channels.Discord.AllowedRoles) == 0 {
+				return fmt.Errorf("chandrad: security: access_policy=role but allowed_roles is empty — add role IDs: chandra access add discord --role <role-id>")
+			}
+		default: // invite, request, allowlist — DB is authoritative
+			// Sum allowed users across all configured channel IDs.
+			// The DB keys allowed_users by real Discord channel ID, not adapter name.
+			var totalUsers int
+			for _, chID := range cfg.Channels.Discord.ChannelIDs {
+				n, err := countDBAllowedUsers(db, chID)
+				if err != nil {
+					return fmt.Errorf("chandrad: security: DB query for channel %s: %v", chID, err)
+				}
+				totalUsers += n
+			}
+			if totalUsers == 0 {
+				return fmt.Errorf("chandrad: security: no authorized users in DB — the bot would lock everyone out. Run 'chandra channel test discord' or: chandra access add discord <user-id>")
+			}
+		}
+	}
 
 	// -------------------------------------------------------------------
 	// Step 4: Initialize memory layers.
@@ -653,12 +653,7 @@ func resolveSocketPath() string {
 // countDBAllowedUsers returns the number of rows in the allowed_users table for
 // the given channel. The DB is the single authoritative source — both Hello World
 // init and 'chandra access add/remove' write only to this table.
-func countDBAllowedUsers(dbPath, channelID string) (int, error) {
-	db, err := sql.Open("sqlite3", dbPath)
-	if err != nil {
-		return 0, err
-	}
-	defer db.Close()
+func countDBAllowedUsers(db *sql.DB, channelID string) (int, error) {
 	var count int
 	return count, db.QueryRow(
 		"SELECT COUNT(*) FROM allowed_users WHERE channel_id = ?", channelID,

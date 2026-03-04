@@ -34,7 +34,9 @@ func TestCountDBAllowedUsers(t *testing.T) {
 	const testChannelID = "1234567890123456789" // realistic Discord channel ID (snowflake)
 
 	// Empty DB → countDBAllowedUsers should return 0.
-	count, err := countDBAllowedUsers(f.Name(), testChannelID)
+	openDB, _ := sql.Open("sqlite3", f.Name())
+	defer openDB.Close()
+	count, err := countDBAllowedUsers(openDB, testChannelID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -43,11 +45,9 @@ func TestCountDBAllowedUsers(t *testing.T) {
 	}
 
 	// Insert one user → count should be 1.
-	db, _ = sql.Open("sqlite3", f.Name())
-	db.Exec("INSERT INTO allowed_users (channel_id, user_id, source) VALUES (?, 'u1', 'test')", testChannelID)
-	db.Close()
+	openDB.Exec("INSERT INTO allowed_users (channel_id, user_id, source) VALUES (?, 'u1', 'test')", testChannelID)
 
-	count, err = countDBAllowedUsers(f.Name(), testChannelID)
+	count, err = countDBAllowedUsers(openDB, testChannelID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
