@@ -740,6 +740,46 @@ var inviteRevokeCmd = &cobra.Command{
 	},
 }
 
+var inviteRedeemCmd = &cobra.Command{
+	Use:   "redeem <code> <channel> <user-id>",
+	Short: "Redeem an invite code to add a user",
+	Long: `Redeem an invite code to grant a user access.
+
+  <channel>  channel adapter name, e.g. discord
+  <user-id>  the platform-specific user ID to add
+  <code>     the invite code (format: chandra-inv-...)
+
+Example:
+  chandra invite redeem chandra-inv-abc123 discord 128604272551133184`,
+	Args: cobra.ExactArgs(3),
+	Run: func(cmd *cobra.Command, args []string) {
+		code := args[0]
+		ch := args[1]
+		userID := args[2]
+
+		db := openDB()
+		defer db.Close()
+		st := access.NewStore(db)
+
+		// Resolve channel IDs from config (same logic as access add).
+		channelIDs := resolveChannelIDs(ch)
+		if len(channelIDs) == 0 {
+			fmt.Fprintf(os.Stderr, "error: no channel IDs configured for %s\n", ch)
+			os.Exit(1)
+		}
+
+		var redeemed []string
+		for _, channelID := range channelIDs {
+			if err := st.RedeemInvite(cmd.Context(), code, channelID, userID, ""); err != nil {
+				fmt.Fprintf(os.Stderr, "error: redeem on channel %s: %v\n", channelID, err)
+				os.Exit(1)
+			}
+			redeemed = append(redeemed, channelID)
+		}
+		fmt.Printf("✓ Redeemed %s — user %s added to %s (%d channel(s))\n", code, userID, ch, len(redeemed))
+	},
+}
+
 // ---- access commands ---------------------------------------------------------
 //
 // User access (invite/request/allowlist policies) lives in the DB — managed here.
@@ -1095,7 +1135,7 @@ func init() {
 	// Invite subcommands.
 	inviteCreateCmd.Flags().Int("uses", 1, "number of times the code can be used")
 	inviteCreateCmd.Flags().String("ttl", "168h", "time-to-live (e.g. 7d, 24h, 30d)")
-	inviteCmd.AddCommand(inviteCreateCmd, inviteListCmd, inviteRevokeCmd)
+	inviteCmd.AddCommand(inviteCreateCmd, inviteListCmd, inviteRevokeCmd, inviteRedeemCmd)
 	rootCmd.AddCommand(inviteCmd)
 
 	// Access subcommands.
