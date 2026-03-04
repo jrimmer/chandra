@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -379,8 +378,7 @@ type schedulerCheck struct {
 // Uses net.Dial so a stale socket file does not produce a false pass.
 func NewSchedulerCheck(socketPath string) Check {
 	if socketPath == "" {
-		home, _ := os.UserHomeDir()
-		socketPath = filepath.Join(home, ".config", "chandra", "chandra.sock")
+		socketPath = api.SocketPath()
 	}
 	return &schedulerCheck{socketPath: socketPath}
 }
