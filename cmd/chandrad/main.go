@@ -167,6 +167,20 @@ func run(ctx context.Context, safeMode bool) error {
 	idStore := identity.NewStore(db, "default")
 	inStore := intent.NewStore(db)
 
+	// Seed agent profile from config if none exists in DB.
+	// This ensures the agent always has a name/persona even on first run.
+	if _, agentErr := idStore.Agent(); agentErr != nil {
+		seedProfile := identity.AgentProfile{
+			Name:    cfg.Identity.Name,
+			Persona: cfg.Identity.Description,
+		}
+		if seedErr := idStore.SetAgent(context.Background(), seedProfile); seedErr != nil {
+			slog.Warn("chandrad: failed to seed agent profile from config", "err", seedErr)
+		} else {
+			slog.Info("chandrad: seeded agent profile from config", "name", seedProfile.Name)
+		}
+	}
+
 	var semStoreIface semantic.SemanticStore = &noopSemanticStore{}
 	if cfg.Embeddings.BaseURL != "" && cfg.Embeddings.Model != "" {
 		embProv := embeddings.NewProvider(
