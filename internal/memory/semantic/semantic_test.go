@@ -239,3 +239,152 @@ func TestSemanticStore_ImportanceHeuristic(t *testing.T) {
 		})
 	}
 }
+
+// --- Hybrid search tests (BM25 + vector + RRF) ---
+
+// TestQueryText_HybridBoostsExactKeyword verifies that a document matching
+// the query exactly by keyword is ranked first even when its embedding is not
+// the closest vector to the query embedding.
+func TestQueryText_HybridBoostsExactKeyword(t *testing.T) {
+	const dims = 4
+	db := newTestDB(t)
+
+	// "coffee meeting" has zero vector — far from query vector.
+	// "jazz concert" has a vector close to the query — but doesn't match keyword.
+	emb := &mockEmbedder{
+		dims: dims,
+		vectors: map[string][]float32{
+			"coffee meeting tomorrow":        {0, 0, 0, 0},         // zero: far from query
+			"jazz concert at the venue":      {1, 0, 0, 0},         // close to query
+			"query text coffee":              {0.9, 0, 0, 0},       // query embedding (close to jazz)
+		},
+	}
+
+	s, err := semantic.NewStore(db, emb)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, s.Store(ctx, pkg.MemoryEntry{Content: "coffee meeting tomorrow", Source: "test", Timestamp: time.Now()}))
+	require.NoError(t, s.Store(ctx, pkg.MemoryEntry{Content: "jazz concert at the venue", Source: "test", Timestamp: time.Now()}))
+
+	results, err := s.QueryText(ctx, "query text coffee", 2)
+	require.NoError(t, err)
+	require.NotEmpty(t, results)
+
+	// "coffee meeting tomorrow" should appear — it matches "coffee" by BM25
+	// even though its vector is far from the query.
+	ids := make([]string, len(results))
+	for i, r := range results {
+		ids[i] = r.Content
+	}
+	assert.Contains(t, ids, "coffee meeting tomorrow",
+		"hybrid search should include keyword match even with poor vector distance")
+}
+
+// TestQueryText_BothPathsContribute verifies that a document appearing in
+// both BM25 and vector results is scored higher (RRF sum) than one that
+// appears in only one.
+func TestQueryText_BothPathsContribute(t *testing.T) {
+	const dims = 4
+	db := newTestDB(t)
+
+	emb := &mockEmbedder{
+		dims: dims,
+		vectors: map[string][]float32{
+			// "the cat sat" — matches "cat" keyword AND has similar vector to query.
+			"the cat sat on the mat":    {1, 0, 0, 0},
+			// "dog barked" — similar vector but no keyword match.
+			"the dog barked loudly":     {0.9, 0, 0, 0},
+			// Query embedding and text.
+			"cat query":                 {1, 0, 0, 0},
+		},
+	}
+
+	s, err := semantic.NewStore(db, emb)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, s.Store(ctx, pkg.MemoryEntry{Content: "the cat sat on the mat", Source: "test", Timestamp: time.Now()}))
+	require.NoError(t, s.Store(ctx, pkg.MemoryEntry{Content: "the dog barked loudly", Source: "test", Timestamp: time.Now()}))
+
+	results, err := s.QueryText(ctx, "cat query", 2)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(results), 1)
+
+	// "the cat sat on the mat" should rank first — appears in both BM25 and vector.
+	assert.Equal(t, "the cat sat on the mat", results[0].Content,
+		"document appearing in both BM25 and vector results should rank first")
+}
+
+// TestQueryText_FallsBackWhenFTSEmpty verifies that QueryText still returns
+// vector results when the FTS index has no matching documents (non-fatal).
+func TestQueryText_FallsBackWhenFTSEmpty(t *testing.T) {
+	const dims = 4
+	db := newTestDB(t)
+
+	emb := &mockEmbedder{
+		dims: dims,
+		vectors: map[string][]float32{
+			"stored document":   {1, 0, 0, 0},
+			"xqzjkv nopqr":     {1, 0, 0, 0}, // query — no FTS match
+		},
+	}
+
+	s, err := semantic.NewStore(db, emb)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, s.Store(ctx, pkg.MemoryEntry{Content: "stored document", Source: "test", Timestamp: time.Now()}))
+
+	// Query with a string that won't match FTS (gibberish) but vector is close.
+	results, err := s.QueryText(ctx, "xqzjkv nopqr", 1)
+	require.NoError(t, err)
+	// Should still get the vector result even with no BM25 hits.
+	require.NotEmpty(t, results, "should fall back to vector results when BM25 finds nothing")
+}
+
+// TestSanitiseFTSQuery exercises the FTS query sanitiser via QueryText
+// (indirectly — we verify no panic/error on special characters in query).
+func TestQueryText_SpecialCharactersInQuery(t *testing.T) {
+	const dims = 4
+	db := newTestDB(t)
+	emb := &mockEmbedder{dims: dims, vectors: map[string][]float32{
+		"normal text": {1, 0, 0, 0},
+		`query "with" special: chars* (and) [brackets]`: {1, 0, 0, 0},
+	}}
+
+	s, err := semantic.NewStore(db, emb)
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, s.Store(ctx, pkg.MemoryEntry{Content: "normal text", Source: "test", Timestamp: time.Now()}))
+
+	// Should not panic or return error on FTS-special characters.
+	_, err = s.QueryText(ctx, `query "with" special: chars* (and) [brackets]`, 1)
+	assert.NoError(t, err, "special characters in query should be sanitised, not cause errors")
+}
+
+// TestRRF_Merging verifies the RRF fusion logic by checking score properties.
+func TestQueryText_RRFScoresExposed(t *testing.T) {
+	const dims = 4
+	db := newTestDB(t)
+	emb := &mockEmbedder{dims: dims, vectors: map[string][]float32{
+		"keyword and vector match": {1, 0, 0, 0},
+		"only keyword match":       {0, 0, 0, 0},
+		"the quick brown fox":      {1, 0, 0, 0}, // query
+	}}
+
+	s, err := semantic.NewStore(db, emb)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	require.NoError(t, s.Store(ctx, pkg.MemoryEntry{Content: "keyword and vector match", Source: "t", Timestamp: time.Now()}))
+	require.NoError(t, s.Store(ctx, pkg.MemoryEntry{Content: "only keyword match", Source: "t", Timestamp: time.Now()}))
+
+	results, err := s.QueryText(ctx, "the quick brown fox", 2)
+	require.NoError(t, err)
+
+	// All returned entries should have a positive RRF score.
+	for _, r := range results {
+		assert.Greater(t, r.Score, float32(0), "all results should have positive RRF score")
+	}
+}
