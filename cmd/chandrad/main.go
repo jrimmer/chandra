@@ -537,7 +537,7 @@ func run(ctx context.Context, safeMode bool) error {
 					} else {
 						// Deliver the response to the originating Discord channel.
 						// "QUIET" response means the agent checked but found nothing to say.
-						isQuiet := resp == "QUIET" || strings.HasPrefix(resp, "QUIET\n")
+						isQuiet := strings.TrimSpace(resp) == "QUIET"
 						if resp != "" && !isQuiet && turn.ChannelID != "" && discordDC != nil {
 							_ = discordDC.Send(ctx, channels.OutboundMessage{
 								ChannelID: turn.ChannelID,
