@@ -106,6 +106,11 @@ func run(ctx context.Context, safeMode bool) error {
 	// Step 2: Verify file permissions (unless safe mode).
 	// -------------------------------------------------------------------
 	if !safeMode {
+		// If the config directory does not exist, the user has not run
+		// 'chandra init' yet — give a clear hint instead of a cryptic permission error.
+		if _, statErr := os.Stat(cfgDir); errors.Is(statErr, os.ErrNotExist) {
+			return fmt.Errorf("chandrad: no configuration found — run 'chandra init' to set up Chandra")
+		}
 		if err := verifyPermissions(cfgDir, cfgPath); err != nil {
 			return fmt.Errorf("chandrad: permission check failed: %w (fix with: chmod 0700 %s && chmod 0600 %s)", err, cfgDir, cfgPath)
 		}

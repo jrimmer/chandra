@@ -50,6 +50,17 @@ var rootCmd = &cobra.Command{
 	Use:   "chandra",
 	Short: "Chandra AI agent CLI",
 	Long:  "chandra is the command-line interface for the Chandra AI agent daemon (chandrad).",
+	// RunE fires when chandra is invoked with no subcommand. If no config
+	// exists we nudge the user toward chandra init; otherwise show help.
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfgPath := resolveDefaultConfigPath()
+		if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
+			fmt.Fprintln(os.Stderr, "No configuration found.")
+			fmt.Fprintln(os.Stderr, "Run 'chandra init' to set up Chandra.")
+			os.Exit(1)
+		}
+		return cmd.Help()
+	},
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		// Skip first-run check for commands that don't need config.
 		switch cmd.Name() {
@@ -769,15 +780,16 @@ Example:
 			os.Exit(1)
 		}
 
-		var redeemed []string
-		for _, channelID := range channelIDs {
-			if err := st.RedeemInvite(cmd.Context(), code, channelID, userID, ""); err != nil {
-				fmt.Fprintf(os.Stderr, "error: redeem on channel %s: %v\n", channelID, err)
-				os.Exit(1)
-			}
-			redeemed = append(redeemed, channelID)
+		added, err := st.RedeemInviteMulti(cmd.Context(), code, channelIDs, userID, "")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
 		}
-		fmt.Printf("✓ Redeemed %s — user %s added to %s (%d channel(s))\n", code, userID, ch, len(redeemed))
+		if added == 0 {
+			fmt.Printf("✓ %s — user %s already authorized on %s\n", code, userID, ch)
+		} else {
+			fmt.Printf("✓ Redeemed %s — user %s added to %s (%d channel(s))\n", code, userID, ch, len(channelIDs))
+		}
 	},
 }
 

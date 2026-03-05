@@ -142,7 +142,7 @@ Use a dedicated test server — not production. The adversarial tests will gener
 |---|------|----------|-------|-------|
 | 1.1.1 | Run curl installer on fresh VM | Binary installed, `chandra --version` works | | |
 | 1.1.2 | Binary in `$PATH` without manual steps | `chandra` resolves from any directory | | |
-| 1.1.3 | Run `chandra` with no config | Friendly "run chandra init" message, no stack trace | ⚠ | `chandra` shows generic help; `chandrad` shows permission error. Neither nudges toward `chandra init` |
+| 1.1.3 | Run `chandra` with no config | Friendly "run chandra init" message, no stack trace | ✅ | `chandra`: "No configuration found. Run 'chandra init' to set up Chandra." `chandrad`: "no configuration found — run 'chandra init' to set up Chandra" |
 | 1.1.4 | Run installer twice | Idempotent — doesn't break existing install | | |
 | 1.1.5 | Installer on low-disk VM (< 100MB free) | Clear disk space error, not a silent partial install | | |
 
