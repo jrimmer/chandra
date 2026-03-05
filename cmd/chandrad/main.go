@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"path/filepath"
 	"syscall"
 	"time"
@@ -468,10 +469,77 @@ func run(ctx context.Context, safeMode bool) error {
 		}()
 	}
 
-	// Now launch the Discord processing goroutine — sessionMgr and agentLoop
-	// are fully assigned above so the goroutine sees their final values.
+	// Now launch the Discord dispatch goroutine.
+	//
+	// Dispatch model: cross-conversation parallel, within-conversation serial.
+	//
+	//   - Multiple conversations (different channel+user pairs) run in parallel:
+	//     no conversation starves because another is slow.
+	//   - Messages within a single conversation are serialized: message N+1 waits
+	//     for message N to complete before the agent loop runs. This ensures:
+	//       (a) episodic memory from turn N is visible when assembling context for N+1
+	//       (b) responses are delivered in order
+	//       (c) no concurrent writes to the same session object
+	//
+	// Implementation: each conversation gets a buffered channel (convQueues).
+	// The router goroutine fans inbound messages into per-conversation channels.
+	// Each conversation channel is drained by exactly one worker goroutine that
+	// runs turns sequentially; that goroutine exits when its channel is closed
+	// (triggered by ctx cancellation via convDone).
 	if discordConfigured && discordDC != nil {
+		type convMsg struct {
+			sess *agent.Session
+			msg  channels.InboundMessage
+		}
+
+		var (
+			convMu    sync.Mutex
+			convQueues = make(map[string]chan convMsg) // key: conversationID
+		)
+
+		// ensureWorker returns the queue channel for a conversation, creating it
+		// (and its worker goroutine) on first use.
+		ensureWorker := func(convID string) chan convMsg {
+			convMu.Lock()
+			defer convMu.Unlock()
+			if q, ok := convQueues[convID]; ok {
+				return q
+			}
+			q := make(chan convMsg, 32) // buffer up to 32 pending turns per conversation
+			convQueues[convID] = q
+			go func() {
+				for cm := range q {
+					callCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+					resp, runErr := agentLoop.Run(callCtx, cm.sess, cm.msg)
+					cancel()
+					if runErr != nil {
+						slog.Error("chandrad: agent loop error",
+							"conversation", convID, "err", runErr)
+						continue
+					}
+					_ = discordDC.Send(ctx, channels.OutboundMessage{
+						ChannelID: cm.msg.ChannelID,
+						Content:   resp,
+						ReplyToID: cm.msg.ID,
+					})
+				}
+				convMu.Lock()
+				delete(convQueues, convID)
+				convMu.Unlock()
+			}()
+			return q
+		}
+
+		// Router goroutine: authenticates, gets/creates session, fans into per-conv queue.
 		go func() {
+			defer func() {
+				// Drain and close all conversation queues on shutdown.
+				convMu.Lock()
+				for _, q := range convQueues {
+					close(q)
+				}
+				convMu.Unlock()
+			}()
 			for {
 				select {
 				case msg, ok := <-discordInbound:
@@ -479,10 +547,10 @@ func run(ctx context.Context, safeMode bool) error {
 						return
 					}
 
-					// Per-message access control: check policy and allowed_users table.
+					// Per-message access control.
 					policy := cfg.Channels.Discord.AccessPolicy
 					if policy == "" {
-						policy = "invite" // default: closed
+						policy = "invite"
 					}
 					if policy != "open" {
 						var allowed bool
@@ -506,25 +574,14 @@ func run(ctx context.Context, safeMode bool) error {
 						slog.Warn("chandrad: discord: agent loop not available, dropping message")
 						continue
 					}
-					// Dispatch per-message goroutine so one slow/hung LLM call
-					// never starves subsequent messages.
-					go func(sess *agent.Session, msg channels.InboundMessage) {
-							// Per-call LLM timeout: 90s is generous for complex multi-tool turns.
-						callCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-						defer cancel()
 
-							resp, runErr := agentLoop.Run(callCtx, sess, msg)
-						slog.Info("chandrad: agent loop returned", "err", runErr)
-						if runErr != nil {
-							slog.Error("chandrad: agent loop error", "err", runErr)
-							return
-						}
-						_ = discordDC.Send(ctx, channels.OutboundMessage{
-							ChannelID: msg.ChannelID,
-							Content:   resp,
-							ReplyToID: msg.ID,
-						})
-					}(sess, msg)
+					q := ensureWorker(msg.ConversationID)
+					select {
+					case q <- convMsg{sess: sess, msg: msg}:
+					default:
+						slog.Warn("chandrad: discord: conversation queue full, dropping message",
+							"conversation", msg.ConversationID)
+					}
 				case <-ctx.Done():
 					return
 				}
