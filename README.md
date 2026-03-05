@@ -21,6 +21,7 @@ Proactive over reactive. The scheduler can inject intent into the agent loop wit
 
 - **Reactive + proactive agent loop** — 9-step think-act-remember cycle processes both user messages and scheduler-injected turns through the same path
 - **Session management** — per-user sessions with 30-minute inactivity timeout; stable conversation IDs via SHA-256 hash give consistent context without unbounded state growth
+- **Message dispatch** — cross-conversation parallel, within-conversation serial (see [Message Dispatch Model](#message-dispatch-model) below)
 - **Graceful lifecycle** — 15-step ordered startup, signal-aware shutdown in reverse; 10-second startup watchdog with config rollback on DB failure
 
 ### Context Budget Manager
@@ -117,6 +118,42 @@ Minimum config:
 ## Testing
 
     CGO_ENABLED=1 go test ./...
+
+
+## Message Dispatch Model
+
+**Problem:** A personal AI agent needs two competing properties:
+1. A slow or hanging LLM call for one user must not starve other users
+2. Sequential messages from the same user must be processed in order, with each turn seeing the prior turn's episodic memory
+
+A naive goroutine-per-message approach satisfies (1) but breaks (2): messages 1 and 2 in the same conversation run concurrently, both assembling context at the same moment before either has written to episodic memory. The result is stale context and potentially out-of-order replies.
+
+A single sequential goroutine satisfies (2) but breaks (1): one slow LLM call for user A freezes every message behind it, regardless of which user sent them.
+
+**Solution: cross-conversation parallel, within-conversation serial**
+
+```
+inbound messages
+      |
+      v
+  router goroutine
+  (auth + session)
+      |
+      +--[conv A]-->  chan (buf 32)  -->  worker A (sequential)
+      |
+      +--[conv B]-->  chan (buf 32)  -->  worker B (sequential)
+      |
+      +--[conv C]-->  chan (buf 32)  -->  worker C (sequential)
+```
+
+- The router goroutine authenticates each message, resolves the session, and fans it into a per-conversation buffered channel (`convQueues` map)
+- Each conversation gets exactly one worker goroutine, created on first message
+- Worker goroutines drain their channel sequentially — turn N+1 starts only after turn N completes, so episodic memory from N is visible when assembling context for N+1
+- Workers across different conversations run in parallel — user A's slow turn does not block user B
+- Each turn has a 90-second context deadline; a hung LLM call times out and logs an error rather than leaking a goroutine
+- Queue overflow (> 32 pending turns per conversation) logs a warning and drops the message rather than blocking the router
+
+**Why not a worker pool?** A fixed pool of N workers would still allow two messages from the same conversation to run concurrently if the pool has spare workers. Per-conversation channels are the right unit of serialization.
 
 ## Architecture
 
