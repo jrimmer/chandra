@@ -469,7 +469,7 @@ func TestAgentLoop_RunScheduled_NoSessionManager(t *testing.T) {
 		SessionID: "sess-001",
 	}
 
-	err := loop.RunScheduled(context.Background(), turn)
+	_, err := loop.RunScheduled(context.Background(), turn)
 	if err != nil {
 		t.Errorf("expected nil when Sessions is nil, got: %v", err)
 	}

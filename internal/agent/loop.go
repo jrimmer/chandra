@@ -3,6 +3,8 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -70,7 +72,7 @@ type AgentLoop interface {
 
 	// RunScheduled processes a proactive turn injected by the Scheduler.
 	// Returns nil immediately (with a WARN log) when the internal queue is full.
-	RunScheduled(ctx context.Context, turn scheduler.ScheduledTurn) error
+	RunScheduled(ctx context.Context, turn scheduler.ScheduledTurn) (string, error)
 }
 
 // Compile-time assertion.
@@ -278,30 +280,59 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 // It converts the ScheduledTurn into a synthetic InboundMessage and drives it
 // through the standard Run() path. If Sessions is not configured the turn is
 // dropped with a warning.
-func (l *agentLoop) RunScheduled(ctx context.Context, turn scheduler.ScheduledTurn) error {
+func (l *agentLoop) RunScheduled(ctx context.Context, turn scheduler.ScheduledTurn) (string, error) {
 	if l.cfg.Sessions == nil {
 		slog.Warn("agent/loop: RunScheduled: no session manager configured; dropping scheduled turn",
 			"intent_id", turn.IntentID,
 		)
-		return nil
+		return "", nil
 	}
 
-	sess, err := l.cfg.Sessions.GetOrCreate(ctx, turn.SessionID, "scheduler", "system")
+	// Use the delivery target channel/user so the session is tied to the right
+	// conversation and episodic context. Fall back to generic scheduler session.
+	channelID := turn.ChannelID
+	userID := turn.UserID
+	convID := turn.SessionID
+	if channelID == "" {
+		channelID = "scheduler"
+	}
+	if userID == "" {
+		userID = "system"
+	}
+	if channelID != "scheduler" && userID != "system" {
+		// Derive a stable conversation ID from channel+user (same as Discord dispatch).
+		convID = computeConvID(channelID, userID)
+	}
+
+	sess, err := l.cfg.Sessions.GetOrCreate(ctx, convID, channelID, userID)
 	if err != nil {
-		return fmt.Errorf("agent/loop: RunScheduled: get session: %w", err)
+		return "", fmt.Errorf("agent/loop: RunScheduled: get session: %w", err)
 	}
 
+	// Wrap the scheduled prompt so the LLM delivers it as a reminder rather
+	// than treating it as a new user-initiated conversation. The instruction
+	// is kept terse to avoid inflating the context window.
+	prompt := "[SCHEDULED REMINDER] Deliver this reminder to the user now. " +
+		"Be brief and natural — one or two sentences max. Do not add caveats " +
+		"or discuss conversation history. Reminder: " + turn.Prompt
 	msg := channels.InboundMessage{
-		ConversationID: turn.SessionID,
-		UserID:         "system",
-		ChannelID:      "scheduler",
-		Content:        turn.Prompt,
+		ConversationID: convID,
+		UserID:         userID,
+		ChannelID:      channelID,
+		Content:        prompt,
 		Timestamp:      time.Now().UTC(),
 		Meta:           map[string]any{"intent_id": turn.IntentID, "scheduled": true},
 	}
 
-	_, runErr := l.Run(ctx, sess, msg)
-	return runErr
+	return l.Run(ctx, sess, msg)
+}
+
+
+// computeConvID returns a stable conversation ID for a channel+user pair,
+// matching the formula used by the Discord channel adapter.
+func computeConvID(channelID, userID string) string {
+	sum := sha256.Sum256([]byte(channelID + ":" + userID))
+	return hex.EncodeToString(sum[:])[:16]
 }
 
 // filterSafeToolCalls removes tool calls that fail the prompt-injection check

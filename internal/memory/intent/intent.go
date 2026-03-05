@@ -29,6 +29,9 @@ type Intent struct {
 	CreatedAt   time.Time
 	LastChecked time.Time
 	NextCheck   time.Time
+	// Delivery target: where to send the response when this intent fires.
+	ChannelID string
+	UserID    string
 }
 
 // IntentStore defines the persistence contract for intents.
@@ -64,8 +67,8 @@ func (s *Store) Create(ctx context.Context, intent Intent) error {
 	}
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO intents (id, description, condition, action, status, created_at, last_checked, next_check)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO intents (id, description, condition, action, status, created_at, last_checked, next_check, channel_id, user_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id,
 		intent.Description,
 		intent.Condition,
@@ -74,6 +77,8 @@ func (s *Store) Create(ctx context.Context, intent Intent) error {
 		now.UnixMilli(),
 		now.UnixMilli(),
 		now.UnixMilli(),
+		intent.ChannelID,
+		intent.UserID,
 	)
 	if err != nil {
 		return fmt.Errorf("intent: create: %w", err)
@@ -112,8 +117,8 @@ func (s *Store) Update(ctx context.Context, intent Intent) error {
 // Active returns all intents with IntentActive.
 func (s *Store) Active(ctx context.Context) ([]Intent, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, description, condition, action, status, created_at, last_checked, next_check
-		 FROM intents
+		`SELECT id, description, condition, action, status, created_at, last_checked, next_check, channel_id, user_id
+	 FROM intents
 		 WHERE status = ?`,
 		string(IntentActive),
 	)
@@ -128,8 +133,8 @@ func (s *Store) Active(ctx context.Context) ([]Intent, error) {
 // Due returns all active intents whose next_check is at or before now.
 func (s *Store) Due(ctx context.Context) ([]Intent, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, description, condition, action, status, created_at, last_checked, next_check
-		 FROM intents
+		`SELECT id, description, condition, action, status, created_at, last_checked, next_check, channel_id, user_id
+	 FROM intents
 		 WHERE status = ? AND next_check <= ?`,
 		string(IntentActive),
 		time.Now().UnixMilli(),
@@ -181,6 +186,8 @@ func scanIntents(rows *sql.Rows) ([]Intent, error) {
 			&createdAtMs,
 			&lastCheckedMs,
 			&nextCheckMs,
+			&in.ChannelID,
+			&in.UserID,
 		); err != nil {
 			return nil, fmt.Errorf("intent: scan row: %w", err)
 		}

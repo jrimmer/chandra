@@ -17,6 +17,9 @@ type ScheduledTurn struct {
 	IntentID  string
 	Prompt    string
 	SessionID string
+	// Delivery target: populated from the intent's channel_id / user_id.
+	ChannelID string
+	UserID    string
 }
 
 // Scheduler defines the contract for the tick-based intent evaluation engine.
@@ -123,6 +126,8 @@ func (s *scheduler) tick(ctx context.Context) {
 			IntentID:  in.ID,
 			Prompt:    in.Action,
 			SessionID: "scheduler",
+			ChannelID: in.ChannelID,
+			UserID:    in.UserID,
 		}
 
 		// Non-blocking send: drop and warn if the channel is full.

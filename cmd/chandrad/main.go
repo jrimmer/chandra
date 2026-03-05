@@ -42,6 +42,7 @@ import (
 	"github.com/jrimmer/chandra/internal/skills"
 	"github.com/jrimmer/chandra/internal/tools"
 	"github.com/jrimmer/chandra/internal/tools/confirm"
+	scheduletool "github.com/jrimmer/chandra/internal/tools/schedule"
 	"github.com/jrimmer/chandra/pkg"
 	"github.com/jrimmer/chandra/store"
 	ctxtools "github.com/jrimmer/chandra/skills/context"
@@ -233,6 +234,12 @@ func run(ctx context.Context, safeMode bool) error {
 	}
 	if err := registry.Register(ctxtools.NewForgetContext(idStore)); err != nil {
 		slog.Warn("chandrad: register forget_context failed", "err", err)
+	}
+	if err := registry.Register(scheduletool.NewScheduleReminderTool(inStore)); err != nil {
+		slog.Warn("chandrad: register schedule_reminder failed", "err", err)
+	}
+	if err := registry.Register(scheduletool.NewGetCurrentTimeTool()); err != nil {
+		slog.Warn("chandrad: register get_current_time failed", "err", err)
 	}
 
 	// read_skill is registered after skillReg is initialized (Step 5b below).
@@ -458,9 +465,24 @@ func run(ctx context.Context, safeMode bool) error {
 						SessionID: turn.SessionID,
 						Details:   map[string]any{"intent_id": turn.IntentID, "prompt": turn.Prompt},
 					})
-					// Execute the scheduled turn.
-					if err := agentLoop.RunScheduled(ctx, turn); err != nil {
-						slog.Error("scheduled turn failed", "intent", turn.IntentID, "err", err)
+					// Execute the scheduled turn. If the turn has a delivery target
+					// (channel_id + user_id), send the response to that Discord channel.
+					resp, schedErr := agentLoop.RunScheduled(ctx, turn)
+					if schedErr != nil {
+						slog.Error("scheduled turn failed", "intent", turn.IntentID, "err", schedErr)
+					} else {
+						// Deliver the response to the originating Discord channel.
+						if resp != "" && turn.ChannelID != "" && discordDC != nil {
+							_ = discordDC.Send(ctx, channels.OutboundMessage{
+								ChannelID: turn.ChannelID,
+								Content:   resp,
+							})
+						}
+						// Mark one-shot intents (condition="time") complete so they
+						// do not re-fire on every scheduler tick.
+						if err := inStore.Complete(ctx, turn.IntentID); err != nil {
+							slog.Warn("scheduler: failed to complete intent", "id", turn.IntentID, "err", err)
+						}
 					}
 				case <-ctx.Done():
 					return
@@ -510,6 +532,7 @@ func run(ctx context.Context, safeMode bool) error {
 			go func() {
 				for cm := range q {
 					callCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+					callCtx = scheduletool.WithDelivery(callCtx, cm.msg.ChannelID, cm.msg.UserID)
 					resp, runErr := agentLoop.Run(callCtx, cm.sess, cm.msg)
 					cancel()
 					if runErr != nil {
