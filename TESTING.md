@@ -194,12 +194,12 @@ Each test: record the exact error message. Acceptable = actionable. Not acceptab
 
 | # | Test | Expected | Pass? | Notes |
 |---|------|----------|-------|-------|
-| 1.4.1 | Run after successful init | All checks pass, exits 0 | | |
-| 1.4.2 | Timing: all checks complete | Under 15s even with provider latency | | |
-| 1.4.3 | Stop daemon, run doctor | Daemon check fails clearly, other checks still complete | | |
+| 1.4.1 | Run after successful init | All checks pass, exits 0 | ✅ | All checks green (⚠ for unverified chaos channel, not a failure) |
+| 1.4.2 | Timing: all checks complete | Under 15s even with provider latency | ✅ | 0.19s total |
+| 1.4.3 | Stop daemon, run doctor | Daemon check fails clearly, other checks still complete | ✅ | ⚠ Daemon + Scheduler show as not running; other checks still complete |
 | 1.4.4 | Invalidate API key, run doctor | Provider check fails with actionable message | | |
-| 1.4.5 | Corrupt `config.toml` (invalid TOML) | Config check fails clearly, no panic | | |
-| 1.4.6 | `chmod 0644 config.toml`, run doctor | Permission check fails with chmod suggestion | | |
+| 1.4.5 | Corrupt `config.toml` (invalid TOML) | Config check fails clearly, no panic | ✅ | ✗ Config: "toml: line 31: expected '.'" — exact parse error, no panic |
+| 1.4.6 | `chmod 0644 config.toml`, run doctor | Permission check fails with chmod suggestion | ✅ | ✗ Permissions: "config file has insecure permissions 0644" |
 | 1.4.7 | Delete `chandra.db`, run doctor | DB check fails, migration suggestion | | |
 | 1.4.8 | Block Discord gateway (firewall rule), run doctor | Channel check fails, not a hang | | |
 | 1.4.9 | Loop test unverified, run doctor | Reports unverified with timestamp, not a pass | | |
