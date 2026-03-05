@@ -190,8 +190,14 @@ func (s *Store) ListUsers(ctx context.Context, channelID string) ([]AllowedUser,
 	for rows.Next() {
 		var u AllowedUser
 		var addedAt int64
-		if err := rows.Scan(&u.UserID, &u.Username, &u.Source, &addedAt); err != nil {
+		var nullUsername sql.NullString
+		if err := rows.Scan(&u.UserID, &nullUsername, &u.Source, &addedAt); err != nil {
 			return nil, err
+		}
+		if nullUsername.Valid && nullUsername.String != "" {
+			u.Username = nullUsername.String
+		} else {
+			u.Username = "(unknown)"
 		}
 		u.AddedAt = time.Unix(addedAt, 0)
 		users = append(users, u)
