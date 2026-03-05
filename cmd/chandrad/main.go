@@ -20,6 +20,7 @@ import (
 
 	"github.com/lmittmann/tint"
 
+	"github.com/jrimmer/chandra/internal/access"
 	"github.com/jrimmer/chandra/internal/actionlog"
 	"github.com/jrimmer/chandra/internal/agent"
 	"github.com/jrimmer/chandra/internal/api"
@@ -646,6 +647,31 @@ func run(ctx context.Context, safeMode bool) error {
 				case msg, ok := <-discordInbound:
 					if !ok {
 						return
+					}
+
+					// A1: !join <code> — intercept BEFORE the access gate so users
+					// can self-onboard using an invite code without being pre-authorized.
+					if joinCode, ok := parseJoinCommand(msg.Content); ok {
+						invStore := access.NewStore(db)
+						redeemErr := invStore.RedeemInvite(ctx, joinCode, msg.ChannelID, msg.UserID, msg.UserID)
+						var reply string
+						if redeemErr != nil {
+							slog.Warn("chandrad: !join: redeem failed",
+								"user_id", msg.UserID, "channel_id", msg.ChannelID, "err", redeemErr)
+							// Generic error — no info leak about whether code exists or is exhausted.
+							reply = "Sorry, that invite code is invalid or has expired. Ask an admin for a new one."
+						} else {
+							slog.Info("chandrad: !join: user added via invite",
+								"user_id", msg.UserID, "channel_id", msg.ChannelID)
+							reply = "Welcome! You've been granted access. Feel free to say hello."
+						}
+						if discordDC != nil {
+							_ = discordDC.Send(ctx, channels.OutboundMessage{
+								ChannelID: msg.ChannelID,
+								Content:   reply,
+							})
+						}
+						continue // do not pass !join messages to the agent
 					}
 
 					// Per-message access control.
@@ -1610,6 +1636,24 @@ func (s *skillCronSyncer) RemoveSkillCron(ctx context.Context, skillName string)
 		}
 	}
 	return nil // not found is fine
+}
+
+// parseJoinCommand detects a "!join <code>" message and returns the trimmed
+// invite code. Returns ("", false) if the message is not a join command.
+// Matching is case-insensitive on the "!join" prefix.
+func parseJoinCommand(content string) (string, bool) {
+	trimmed := strings.TrimSpace(content)
+	lower := strings.ToLower(trimmed)
+	if !strings.HasPrefix(lower, "!join") {
+		return "", false
+	}
+	rest := strings.TrimSpace(trimmed[len("!join"):])
+	if rest == "" {
+		return "", false // "!join" with no code — ignore
+	}
+	// Reject codes with spaces (only the first token is the code).
+	fields := strings.Fields(rest)
+	return fields[0], true
 }
 
 // expandPath expands ~ to the user's home directory.
