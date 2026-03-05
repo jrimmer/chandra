@@ -1212,24 +1212,9 @@ func registerHandlers(
 
 	// skill.list
 	srv.Handle("skill.list", func(ctx context.Context, _ json.RawMessage) (any, error) {
-		type skillSummary struct {
-			Name        string   `json:"name"`
-			Description string   `json:"description"`
-			Version     string   `json:"version"`
-			Triggers    []string `json:"triggers"`
-		}
-		all := skillReg.All()
-		summaries := make([]skillSummary, len(all))
-		for i, s := range all {
-			summaries[i] = skillSummary{
-				Name:        s.Name,
-				Description: s.Description,
-				Version:     s.Version,
-				Triggers:    s.Triggers,
-			}
-		}
+		// Return full Skill structs; the client formats for display.
 		return map[string]any{
-			"skills": summaries,
+			"skills": skillReg.All(),
 			"unmet":  skillReg.Unmet(),
 		}, nil
 	})
