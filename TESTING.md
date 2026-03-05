@@ -293,19 +293,19 @@ These tests probe the boundary between user input and agent behavior. The agent 
 
 | # | Test | Expected | Pass? | Notes |
 |---|------|----------|-------|-------|
-| 2.3.1 | Generate invite code | Created with uses + expiry | | |
-| 2.3.2 | Redeem valid code | Access granted immediately | | |
-| 2.3.3 | Redeem expired code | Rejected, clear message | | |
-| 2.3.4 | Redeem exhausted code | Rejected, clear message | | |
-| 2.3.5 | Replay a used single-use code | Rejected, not re-granted | | |
-| 2.3.6 | Brute-force !join (6+ attempts from same user) | Rate limited after 5, no error that helps attacker | | |
-| 2.3.7 | Brute-force from multiple users simultaneously | Per-user rate limit enforced, not a global limit that blocks legitimate users | | |
-| 2.3.8 | Request policy: flood of requests (25+ rapid) | Queue capped at 20, excess silently dropped | | |
-| 2.3.9 | Request policy: same user requests access 4x in 24h | Throttled at 3, 4th silently dropped | | |
-| 2.3.10 | Time window: `chandra access open --duration 5m` | Window opens, closes automatically | | |
-| 2.3.11 | Time window: kill daemon mid-window, restart | Window closes on restart if past expiry, admin notified | | |
-| 2.3.12 | Time window: system clock skew | Window still closes at correct wall-clock time | | |
-| 2.3.13 | Unauthorized user message | Silently rejected — no response, not an error message visible to the user | | |
+| 2.3.1 | Generate invite code | Created with uses + expiry | ✅ | chandra invite create --ttl --uses; listed correctly |
+| 2.3.2 | Redeem valid code | Access granted immediately | ✅ | Added to allowed_users; source=invite; chandra access list confirms |
+| 2.3.3 | Redeem expired code | Rejected, clear message | ✅ | "invite code expired" after --ttl 1s |
+| 2.3.4 | Redeem exhausted code | Rejected, clear message | ✅ | "invite code exhausted" |
+| 2.3.5 | Replay a used single-use code | Rejected, not re-granted | ✅ | Fixed: uses=1 now covers multi-channel as single redemption; replay returns exhausted; no re-grant |
+| 2.3.6 | Brute-force !join (6+ attempts from same user) | Rate limited after 5, no error that helps attacker | ⏳ | GAP: no !join bot command or brute-force rate limiting implemented; Phase 2 |
+| 2.3.7 | Brute-force from multiple users simultaneously | Per-user rate limit enforced, not a global limit that blocks legitimate users | ⏳ | GAP: no rate limiting; Phase 2 |
+| 2.3.8 | Request policy: flood of requests (25+ rapid) | Queue capped at 20, excess silently dropped | ⏳ | GAP: request policy not implemented; messages from unauthorized users are silently dropped at router; Phase 2 |
+| 2.3.9 | Request policy: same user requests access 4x in 24h | Throttled at 3, 4th silently dropped | ⏳ | GAP: no request throttle; Phase 2 |
+| 2.3.10 | Time window: `chandra access open --duration 5m` | Window opens, closes automatically | ⏳ | GAP: `chandra access open` not implemented; Phase 2 |
+| 2.3.11 | Time window: kill daemon mid-window, restart | Window closes on restart if past expiry, admin notified | ⏳ | GAP: depends on 2.3.10; Phase 2 |
+| 2.3.12 | Time window: system clock skew | Window still closes at correct wall-clock time | ⏳ | GAP: depends on 2.3.10; Phase 2 |
+| 2.3.13 | Unauthorized user message | Silently rejected — no response, not an error message visible to the user | ✅ | Confirmed: unauthorized messages logged as WARN, silently dropped, no reply sent |
 
 ---
 

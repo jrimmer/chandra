@@ -145,6 +145,21 @@ func (s *Store) RedeemInvite(ctx context.Context, code, channelID, userID, usern
 		return fmt.Errorf("invite code expired")
 	}
 
+	// Idempotency check: if the user is already in the allowlist for this channel,
+	// return success without consuming a use. Prevents replay attacks from burning
+	// through uses on already-authorized users.
+	var alreadyAuthorized int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM allowed_users WHERE channel_id = ? AND user_id = ?`,
+		channelID, userID,
+	).Scan(&alreadyAuthorized); err != nil {
+		return fmt.Errorf("check existing user: %w", err)
+	}
+	if alreadyAuthorized > 0 {
+		// Already authorized — commit without decrementing uses.
+		return tx.Commit()
+	}
+
 	newUses := uses - 1
 	if _, err := tx.ExecContext(ctx, `UPDATE invite_codes SET uses_remaining = ? WHERE code = ?`, newUses, code); err != nil {
 		return fmt.Errorf("decrement uses: %w", err)
@@ -158,6 +173,72 @@ func (s *Store) RedeemInvite(ctx context.Context, code, channelID, userID, usern
 	}
 
 	return tx.Commit()
+}
+
+
+// RedeemInviteMulti redeems an invite code for a user across multiple channel IDs.
+// Uses are decremented exactly once regardless of how many channels are provided.
+// If the user is already authorized in all channels, no uses are consumed (idempotent).
+func (s *Store) RedeemInviteMulti(ctx context.Context, code string, channelIDs []string, userID, username string) (int, error) {
+	if len(channelIDs) == 0 {
+		return 0, fmt.Errorf("no channel IDs provided")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	var uses int
+	var expiresAt *int64
+	err = tx.QueryRowContext(ctx,
+		`SELECT uses_remaining, expires_at FROM invite_codes WHERE code = ?`, code,
+	).Scan(&uses, &expiresAt)
+	if err == sql.ErrNoRows {
+		return 0, fmt.Errorf("invite code not found or already used")
+	}
+	if err != nil {
+		return 0, fmt.Errorf("check code: %w", err)
+	}
+	if uses == 0 {
+		return 0, fmt.Errorf("invite code exhausted")
+	}
+	if expiresAt != nil && time.Now().Unix() > *expiresAt {
+		return 0, fmt.Errorf("invite code expired")
+	}
+
+	// Check if the user is already authorized in ALL channels — idempotent return.
+	now := time.Now().Unix()
+	var added int
+	for _, chID := range channelIDs {
+		var count int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM allowed_users WHERE channel_id = ? AND user_id = ?`,
+			chID, userID,
+		).Scan(&count); err != nil {
+			return 0, fmt.Errorf("check existing user: %w", err)
+		}
+		if count > 0 {
+			continue // already authorized in this channel
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT OR IGNORE INTO allowed_users (channel_id, user_id, username, source, added_at) VALUES (?, ?, ?, 'invite', ?)`,
+			chID, userID, username, now,
+		); err != nil {
+			return 0, fmt.Errorf("add user to channel %s: %w", chID, err)
+		}
+		added++
+	}
+
+	// Only decrement uses if at least one channel was newly authorized.
+	if added > 0 {
+		if _, err := tx.ExecContext(ctx, `UPDATE invite_codes SET uses_remaining = ? WHERE code = ?`, uses-1, code); err != nil {
+			return 0, fmt.Errorf("decrement uses: %w", err)
+		}
+	}
+
+	return added, tx.Commit()
 }
 
 // AddUser adds a user directly to the allowlist (for manual and hello_world sources).
