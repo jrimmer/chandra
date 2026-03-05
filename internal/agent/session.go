@@ -194,6 +194,45 @@ func (m *manager) GetOrCreate(ctx context.Context, conversationID string, channe
 		// Session has expired — fall through to create a new one.
 	}
 
+	// Cache miss — check DB for an active session before creating a new one.
+	// This handles daemon restarts within the session timeout window; without
+	// this check, every restart creates a new session ID and episodes from the
+	// previous session are unreachable (they are indexed by session ID).
+	var dbSess *Session
+	row := m.db.QueryRowContext(ctx,
+		`SELECT id, conversation_id, channel_id, user_id, started_at, last_active
+		   FROM sessions
+		  WHERE channel_id = ? AND user_id = ?
+		  ORDER BY last_active DESC
+		  LIMIT 1`,
+		channelID, userID,
+	)
+	var (
+		dbID, dbConvID, dbChanID, dbUserID string
+		dbStartedMs, dbLastActiveMs         int64
+	)
+	if err := row.Scan(&dbID, &dbConvID, &dbChanID, &dbUserID, &dbStartedMs, &dbLastActiveMs); err == nil {
+		dbLastActive := time.UnixMilli(dbLastActiveMs).UTC()
+		if now.Sub(dbLastActive) < m.timeout {
+			// Active session found in DB — restore into cache.
+			dbSess = &Session{
+				ID:             dbID,
+				ConversationID: dbConvID,
+				ChannelID:      dbChanID,
+				UserID:         dbUserID,
+				StartedAt:      time.UnixMilli(dbStartedMs).UTC(),
+				LastActive:     now,
+			}
+			// Update last_active in DB to keep the session alive.
+			_, _ = m.db.ExecContext(ctx,
+				`UPDATE sessions SET last_active = ? WHERE id = ?`,
+				now.UnixMilli(), dbID,
+			)
+			m.cache.Store(key, dbSess)
+			return dbSess, nil
+		}
+	}
+
 	// Check max concurrent sessions limit.
 	if m.maxConcurrent > 0 {
 		count := 0

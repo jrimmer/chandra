@@ -15,6 +15,10 @@ import (
 type EpisodicStore interface {
 	Append(ctx context.Context, ep pkg.Episode) error
 	Recent(ctx context.Context, sessionID string, n int) ([]pkg.Episode, error)
+	// RecentAcrossSessions returns the n most recent episodes for a given
+	// channel+user combination, spanning all sessions. Use this to retrieve
+	// episodic context that survives daemon restarts and session boundaries.
+	RecentAcrossSessions(ctx context.Context, channelID, userID string, n int) ([]pkg.Episode, error)
 	Since(ctx context.Context, t time.Time) ([]pkg.Episode, error)
 }
 
@@ -75,6 +79,27 @@ func (s *Store) Recent(ctx context.Context, sessionID string, n int) ([]pkg.Epis
 	)
 	if err != nil {
 		return nil, fmt.Errorf("episodic: recent: %w", err)
+	}
+	defer rows.Close()
+
+	return scanEpisodes(rows)
+}
+
+// RecentAcrossSessions returns the n most recent episodes for a given
+// channel+user pair, joining across all sessions. This survives daemon
+// restarts and session boundary transitions.
+func (s *Store) RecentAcrossSessions(ctx context.Context, channelID, userID string, n int) ([]pkg.Episode, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT e.id, e.session_id, e.role, e.content, e.timestamp, e.tags
+		 FROM episodes e
+		 JOIN sessions sess ON e.session_id = sess.id
+		 WHERE sess.channel_id = ? AND sess.user_id = ?
+		 ORDER BY e.timestamp DESC
+		 LIMIT ?`,
+		channelID, userID, n,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("episodic: recent_across_sessions: %w", err)
 	}
 	defer rows.Close()
 

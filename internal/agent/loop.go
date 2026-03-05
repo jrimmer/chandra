@@ -93,7 +93,10 @@ func NewLoop(cfg LoopConfig) AgentLoop {
 // Run implements AgentLoop.Run: the 9-step think-act-remember cycle.
 func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.InboundMessage) (string, error) {
 	// Step 1: Load recent episodes and identity context.
-	recentEps, err := l.cfg.Memory.Episodic().Recent(ctx, session.ID, 20)
+	// Use RecentAcrossSessions so episodic memory survives daemon restarts
+	// and session boundary transitions (session IDs change on each restart
+	// but channel+user identifies the conversation continuously).
+	recentEps, err := l.cfg.Memory.Episodic().RecentAcrossSessions(ctx, session.ChannelID, session.UserID, 20)
 	if err != nil {
 		slog.Warn("agent/loop: failed to load recent episodes", "session_id", session.ID, "error", err)
 	}
