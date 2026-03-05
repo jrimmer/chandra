@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -62,6 +64,7 @@ type LoopConfig struct {
 	// PostProcessDone is called by the post-processing goroutine when it completes.
 	// Set in tests to synchronise assertions against async writes; leave nil in production.
 	PostProcessDone func()
+	PersonaFile    string              // optional: path to persona markdown file (overrides DB identity)
 	ToolAllowlist  map[string][]string // channelID → allowed tool names (nil = all allowed)
 	SkillRegistry  SkillMatcher        // optional: matches skills to messages
 	SkillPriority  float64             // default: 0.7
@@ -108,7 +111,7 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 	}
 	// Steps 2-3: Retrieve semantic memories and assemble context window.
 	// Prepend identity system prompt as the highest-priority fixed candidate.
-	fixed := buildIdentityCandidate(l.cfg.Memory)
+	fixed := buildIdentityCandidate(l.cfg.Memory, l.cfg.PersonaFile)
 	fixed = append(fixed, episodesToCandidates(recentEps)...)
 
 	// Step 4: Apply tool allowlist (before assembly so window carries the right tools).
@@ -497,7 +500,29 @@ func estimateTokens(s string) int {
 // memory and returns a single high-priority system-prompt ContextCandidate.
 // If either load fails (e.g. first run before any profile is set), an empty
 // slice is returned so the rest of context assembly proceeds unaffected.
-func buildIdentityCandidate(mem memory.Memory) []budget.ContextCandidate {
+func buildIdentityCandidate(mem memory.Memory, personaFile string) []budget.ContextCandidate {
+	// If a persona_file is configured, it becomes the entire system prompt.
+	// This allows rich multi-paragraph personas without DB size concerns.
+	if personaFile != "" {
+		path := personaFile
+		if strings.HasPrefix(path, "~/") {
+			home, _ := os.UserHomeDir()
+			path = filepath.Join(home, path[2:])
+		}
+		if raw, err := os.ReadFile(path); err == nil {
+			systemPrompt := strings.TrimSpace(string(raw))
+			return []budget.ContextCandidate{{
+				Role:     "system",
+				Content:  systemPrompt,
+				Priority: 1.0,
+				Tokens:   estimateTokens(systemPrompt),
+			}}
+		} else {
+			slog.Warn("agent/loop: persona_file read failed, falling back to DB identity",
+				"path", path, "err", err)
+		}
+	}
+
 	agentProfile, agentErr := mem.Identity().Agent()
 	if agentErr != nil {
 		// Profile not yet configured — skip rather than error.

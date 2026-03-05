@@ -510,6 +510,7 @@ func run(ctx context.Context, safeMode bool) error {
 			Channel:        discordChannel, // G18: wire Discord channel for response sending
 			Sessions:       sessionMgr,     // required for RunScheduled to process turns
 			MaxRounds:      cfg.Identity.MaxToolRounds,
+			PersonaFile:    cfg.Identity.PersonaFile,
 			SkillRegistry:  skillReg,
 			SkillPriority:  cfg.Skills.Priority,
 			SkillMaxTokens: cfg.Skills.MaxContextTokens,
