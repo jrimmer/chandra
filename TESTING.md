@@ -564,3 +564,7 @@ Record every test session here.
 - Console spec: `CONSOLE.md`
 - Plugin architecture: `PLUGINS.md`
 - Reliability spec: `RELIABILITY.md`
+
+## CI
+
+Not yet configured. A GitHub Actions workflow (, Ubuntu runner) would run  on every push and PR. Skipped for now — add when the repo gets contributors or PRs.
