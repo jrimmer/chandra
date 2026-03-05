@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+
+	"github.com/mattn/go-isatty"
 	"path/filepath"
 	"strings"
 	"time"
@@ -47,6 +49,12 @@ func checkpointPath(cfgDir string) string {
 
 // Run executes the interactive init wizard.
 func Run(ctx context.Context, opts Options) error {
+	// chandra init is an interactive TUI wizard — it requires a real terminal.
+	// If stdin is not a TTY (e.g. piped input in CI or scripts), fail fast with
+	// a clear message rather than letting huh crash with a cryptic internal error.
+	if !opts.NonInteractive && !isatty.IsTerminal(os.Stdin.Fd()) && !isatty.IsCygwinTerminal(os.Stdin.Fd()) {
+		return fmt.Errorf("chandra init requires an interactive terminal (stdin is not a TTY); run 'chandra init' directly in your terminal, not via a pipe or script")
+	}
 	cfgDir := filepath.Dir(opts.ConfigPath)
 	cpPath := checkpointPath(cfgDir)
 
