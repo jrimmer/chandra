@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,10 +29,31 @@ import (
 // call is a helper that creates an api.Client, calls the given method with
 // params, and pretty-prints the result to stdout. On any error it writes to
 // stderr and exits 1.
+// isConnectError reports whether err is a network connection failure
+// (daemon not running, socket not found, connection refused).
+func isConnectError(err error) bool {
+	var netErr *net.OpError
+	if errors.As(err, &netErr) {
+		return true
+	}
+	// Also catch "no such file or directory" for missing socket file.
+	msg := err.Error()
+	return strings.Contains(msg, "no such file or directory") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "connect: ")
+}
+
 func call(method string, params any) {
 	client := api.NewClient(api.SocketPath())
 	var result json.RawMessage
 	if err := client.Call(context.Background(), method, params, &result); err != nil {
+		// Convert low-level socket errors into a friendly "daemon not running" message.
+		if isConnectError(err) {
+			fmt.Fprintln(os.Stderr, "error: chandra daemon is not running.")
+			fmt.Fprintln(os.Stderr, "  Start it with: chandrad")
+			fmt.Fprintln(os.Stderr, "  Or check: chandra doctor")
+			os.Exit(1)
+		}
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}

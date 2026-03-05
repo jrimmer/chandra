@@ -212,12 +212,12 @@ Each test: record the exact error message. Acceptable = actionable. Not acceptab
 
 | # | Test | Expected | Pass? | Notes |
 |---|------|----------|-------|-------|
-| 1.5.1 | Run with everything healthy | Clean display, all subsystems shown | | |
-| 1.5.2 | Kill daemon, run status | Clear "daemon not running" message, not a connection error | | |
-| 1.5.3 | Disconnect DB mid-run, check status | DB shows degraded, not "ok" | | |
-| 1.5.4 | Provider unreachable, check status | Shows unreachable, not cached "ok" | | |
-| 1.5.5 | Status during active reconnect | Shows "reconnecting", not "connected" | | |
-| 1.5.6 | Status when DB is locked (WAL checkpoint running) | Waits or reports "busy", doesn't panic | | |
+| 1.5.1 | Run with everything healthy | Clean display, all subsystems shown | ⚠ | `chandra status` minimal (running/uptime/version); `chandra health` shows all subsystems. Two commands, both correct for their purpose |
+| 1.5.2 | Kill daemon, run status | Clear "daemon not running" message, not a connection error | ✅ | "chandra daemon is not running. Start it with: chandrad. Or check: chandra doctor" |
+| 1.5.3 | Disconnect DB mid-run, check status | DB shows degraded, not "ok" | ⏳ | GAP: SQLite holds open connection; chmod/flock don't cause PingContext failure. Hard to simulate disk/FS errors in-process |
+| 1.5.4 | Provider unreachable, check status | Shows unreachable, not cached "ok" | ✅ | Blocked api.anthropic.com via /etc/hosts; provider: "unreachable", status: "degraded" |
+| 1.5.5 | Status during active reconnect | Shows "reconnecting", not "connected" | ⏳ | GAP: no reconnect state tracking; discordgo handles reconnects internally; health only shows connected/not |
+| 1.5.6 | Status when DB is locked (WAL checkpoint running) | Waits or reports "busy", doesn't panic | ✅ | `sqlite3 PRAGMA wal_checkpoint(FULL)` concurrent with health; health returned correctly, no panic |
 
 ---
 

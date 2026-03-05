@@ -8,6 +8,8 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
 	"os"
 	"os/signal"
 	"sync"
@@ -639,7 +641,7 @@ func run(ctx context.Context, safeMode bool) error {
 
 	planExec := executor.NewExecutor(alog)
 	planPlan := planner.NewPlanner(chatProvider, skillReg)
-	registerHandlers(apiServer, cancelDaemon, startTime, mem, inStore, registry, alog, confirmGate, db, agentLoop, sessionMgr, discordChannel, discordConfigured, skillReg, infraMgr, planExec, planPlan)
+	registerHandlers(apiServer, cancelDaemon, startTime, mem, inStore, registry, alog, confirmGate, db, agentLoop, sessionMgr, discordChannel, discordConfigured, skillReg, infraMgr, planExec, planPlan, cfg.Provider.BaseURL)
 
 	socketPath := resolveSocketPath()
 	if err := apiServer.Start(socketPath); err != nil {
@@ -849,6 +851,7 @@ func registerHandlers(
 	infraMgr *infra.Manager,
 	planExecutor *executor.Executor,
 	planPlanner *planner.Planner,
+	providerBaseURL string,
 ) {
 	// daemon.health
 	srv.Handle("daemon.health", func(ctx context.Context, _ json.RawMessage) (any, error) {
@@ -873,6 +876,37 @@ func registerHandlers(
 			discordInfo = map[string]any{"status": "not_configured", "connected": false}
 		} else {
 			discordInfo = map[string]any{"status": "disabled", "connected": false}
+		}
+
+		// --- Provider reachability probe ---
+		// Use a short-timeout TCP dial to the API base URL host.
+		// This detects network outages without burning API tokens.
+		providerStatus := "ok"
+		{
+			probeCtx, probeCancel := context.WithTimeout(ctx, 3*time.Second)
+			defer probeCancel()
+			baseURL := providerBaseURL
+			if baseURL == "" {
+				baseURL = "https://api.openai.com"
+			}
+			u, parseErr := url.Parse(baseURL)
+			if parseErr == nil {
+				host := u.Hostname()
+				port := u.Port()
+				if port == "" {
+					if u.Scheme == "https" {
+						port = "443"
+					} else {
+						port = "80"
+					}
+				}
+				var nd net.Dialer
+				_, dialErr := nd.DialContext(probeCtx, "tcp", net.JoinHostPort(host, port))
+				if dialErr != nil {
+					providerStatus = "unreachable"
+					slog.Warn("chandrad: health: provider unreachable", "err", dialErr)
+				}
+			}
 		}
 
 		// --- Scheduler pending intents ---
@@ -904,6 +938,8 @@ func registerHandlers(
 		overallStatus := "healthy"
 		if dbStatus != "ok" {
 			overallStatus = "unhealthy"
+		} else if providerStatus != "ok" {
+			overallStatus = "degraded"
 		} else if discordConfigured && discordChannel == nil {
 			overallStatus = "degraded"
 		}
@@ -916,7 +952,7 @@ func registerHandlers(
 				"discord":   discordInfo,
 				"mqtt":      map[string]any{"status": "ok", "connected": false},
 				"scheduler": map[string]any{"status": "ok", "pending_intents": pendingIntents},
-				"provider":  map[string]any{"status": "ok"},
+				"provider":  map[string]any{"status": providerStatus},
 			},
 			"active_sessions":  activeSessions,
 			"memory_entries":   memoryEntries,
