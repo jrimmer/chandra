@@ -214,6 +214,8 @@ func (m *mockChannel) Listen(_ context.Context, _ chan<- channels.InboundMessage
 func (m *mockChannel) Send(_ context.Context, _ channels.OutboundMessage) error         { return nil }
 func (m *mockChannel) React(_ context.Context, _, _ string) error                       { return nil }
 func (m *mockChannel) SendCheckpoint(_ context.Context, _, _ string) error              { return nil }
+func (m *mockChannel) Reconnect(_ context.Context) error                               { return nil }
+func (m *mockChannel) ConnectionState() channels.ConnectionState                        { return channels.StateConnected }
 
 var _ channels.Channel = (*mockChannel)(nil)
 

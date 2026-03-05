@@ -56,10 +56,11 @@ type Discord struct {
 	channelIDs map[string]struct{} // set of channel IDs to listen on
 
 	mu         sync.RWMutex
-	msgChanMap map[string]string // messageID → channelID for React lookups
-	msgIDOrder []string          // insertion-order tracking for FIFO eviction
-	msgChanMax int               // maximum entries in msgChanMap (default 10000)
-	done       bool              // true after shutdown; guards against send on closed channel
+	msgChanMap map[string]string  // messageID → channelID for React lookups
+	msgIDOrder []string           // insertion-order tracking for FIFO eviction
+	msgChanMax int                // maximum entries in msgChanMap (default 10000)
+	done       bool               // true after shutdown; guards against send on closed channel
+	connState  channels.ConnectionState // current connection state
 }
 
 // NewDiscord constructs a Discord adapter with the given bot token and the list
@@ -94,6 +95,7 @@ func NewDiscord(token string, channelIDs []string) (*Discord, error) {
 		msgChanMap: make(map[string]string),
 		msgIDOrder: make([]string, 0, 100),
 		msgChanMax: 10000,
+		connState:  channels.StateUnknown,
 	}, nil
 }
 
@@ -167,9 +169,29 @@ func (d *Discord) Listen(ctx context.Context, msgs chan<- channels.InboundMessag
 		}
 	})
 
+	// Track connect/disconnect events for health reporting.
+	d.session.AddHandler(func(s *discordgo.Session, e *discordgo.Connect) {
+		d.mu.Lock()
+		d.connState = channels.StateConnected
+		d.mu.Unlock()
+		slog.Info("discord: connected")
+	})
+	d.session.AddHandler(func(s *discordgo.Session, e *discordgo.Disconnect) {
+		d.mu.Lock()
+		if !d.done {
+			d.connState = channels.StateReconnecting
+		}
+		d.mu.Unlock()
+		slog.Warn("discord: disconnected; discordgo will attempt reconnect")
+	})
+
 	if err := d.session.Open(); err != nil {
 		return fmt.Errorf("discord: open session: %w", err)
 	}
+
+	d.mu.Lock()
+	d.connState = channels.StateConnected
+	d.mu.Unlock()
 
 	if err := d.session.UpdateGameStatus(0, "Ready"); err != nil {
 		// Non-fatal: log and continue.
@@ -198,6 +220,39 @@ func (d *Discord) Send(ctx context.Context, msg channels.OutboundMessage) error 
 	}
 	return nil
 }
+
+// Reconnect closes the current Discord session and opens a new one.
+// Called by the ChannelSupervisor when it needs to re-establish the connection.
+func (d *Discord) Reconnect(ctx context.Context) error {
+	d.mu.Lock()
+	d.connState = channels.StateReconnecting
+	d.mu.Unlock()
+
+	// Close the existing session (ignore error — we're tearing down anyway).
+	_ = d.session.Close()
+
+	// Re-open the WebSocket connection.
+	if err := d.session.Open(); err != nil {
+		d.mu.Lock()
+		d.connState = channels.StateFailed
+		d.mu.Unlock()
+		return fmt.Errorf("discord: reconnect open: %w", err)
+	}
+
+	d.mu.Lock()
+	d.connState = channels.StateConnected
+	d.mu.Unlock()
+	slog.Info("discord: reconnected successfully")
+	return nil
+}
+
+// ConnectionState returns the current connection state for health reporting.
+func (d *Discord) ConnectionState() channels.ConnectionState {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.connState
+}
+
 
 // SendCheckpoint sends an interactive checkpoint message with approval options.
 // On Discord, this sends an embed with action buttons (Approve, Reject, Show Plan).

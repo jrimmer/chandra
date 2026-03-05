@@ -27,6 +27,29 @@ type OutboundMessage struct {
 	Meta      map[string]any
 }
 
+// ConnectionState represents the current lifecycle state of a channel connection.
+type ConnectionState int
+
+const (
+	StateUnknown      ConnectionState = iota
+	StateConnected                    // WebSocket open, receiving events
+	StateReconnecting                 // backoff loop active, attempting reconnect
+	StateFailed                       // exhausted retries or unrecoverable error
+)
+
+func (s ConnectionState) String() string {
+	switch s {
+	case StateConnected:
+		return "connected"
+	case StateReconnecting:
+		return "reconnecting"
+	case StateFailed:
+		return "failed"
+	default:
+		return "unknown"
+	}
+}
+
 // Channel is the interface that all messaging platform adapters must implement.
 type Channel interface {
 	ID() string
@@ -36,4 +59,9 @@ type Channel interface {
 	// SendCheckpoint sends an interactive checkpoint message with approval options.
 	// Implementations may render buttons (Discord) or text commands (CLI).
 	SendCheckpoint(ctx context.Context, planID string, stepDescription string) error
+	// Reconnect closes and reopens the underlying transport connection.
+	// Called by the ChannelSupervisor after a connection failure.
+	Reconnect(ctx context.Context) error
+	// ConnectionState returns the current connection state for health reporting.
+	ConnectionState() ConnectionState
 }

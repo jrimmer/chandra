@@ -424,6 +424,7 @@ func run(ctx context.Context, safeMode bool) error {
 	var discordChannel channels.Channel
 	var discordInbound chan channels.InboundMessage
 	var discordDC *discord.Discord
+	var discordSupervisor *channels.ChannelSupervisor
 	discordConfigured := !safeMode && cfg.Channels.Discord != nil && cfg.Channels.Discord.BotToken != ""
 	if discordConfigured {
 		slog.Info("chandrad: starting Discord channel listener")
@@ -431,13 +432,22 @@ func run(ctx context.Context, safeMode bool) error {
 		if dcErr != nil {
 			return fmt.Errorf("chandrad: discord init: %w", dcErr)
 		}
+		// Wrap with ChannelSupervisor for exponential-backoff reconnect and health state.
+		sup := channels.NewSupervisor(dc, channels.SupervisorConfig{
+			InitialBackoff: time.Second,
+			MaxBackoff:     30 * time.Second,
+			MaxAttempts:    0, // retry forever
+		})
 		inbound := make(chan channels.InboundMessage, 64)
-		if listenErr := dc.Listen(ctx, inbound); listenErr != nil {
-			return fmt.Errorf("chandrad: discord listen: %w", listenErr)
-		}
-		discordChannel = dc
+		go func() {
+			if listenErr := sup.Listen(ctx, inbound); listenErr != nil && ctx.Err() == nil {
+				slog.Error("chandrad: discord supervisor exited with error", "err", listenErr)
+			}
+		}()
+		discordChannel = sup
 		discordInbound = inbound
 		discordDC = dc
+		discordSupervisor = sup
 	} else {
 		slog.Info("chandrad: Discord not configured, skipping")
 	}
@@ -674,7 +684,7 @@ func run(ctx context.Context, safeMode bool) error {
 
 	planExec := executor.NewExecutor(alog)
 	planPlan := planner.NewPlanner(chatProvider, skillReg)
-	registerHandlers(apiServer, cancelDaemon, startTime, mem, inStore, registry, alog, confirmGate, db, agentLoop, sessionMgr, discordChannel, discordConfigured, skillReg, infraMgr, planExec, planPlan, cfg.Provider.BaseURL)
+	registerHandlers(apiServer, cancelDaemon, startTime, mem, inStore, registry, alog, confirmGate, db, agentLoop, sessionMgr, discordChannel, discordConfigured, skillReg, infraMgr, planExec, planPlan, cfg.Provider.BaseURL, discordSupervisor)
 
 	socketPath := resolveSocketPath()
 	if err := apiServer.Start(socketPath); err != nil {
@@ -885,6 +895,7 @@ func registerHandlers(
 	planExecutor *executor.Executor,
 	planPlanner *planner.Planner,
 	providerBaseURL string,
+	discordSupervisor *channels.ChannelSupervisor,
 ) {
 	// daemon.health
 	srv.Handle("daemon.health", func(ctx context.Context, _ json.RawMessage) (any, error) {
@@ -903,8 +914,13 @@ func registerHandlers(
 
 		// --- Discord status ---
 		var discordInfo map[string]any
-		if discordChannel != nil {
-			discordInfo = map[string]any{"status": "ok", "connected": true}
+		if discordSupervisor != nil {
+			state := discordSupervisor.ConnectionState()
+			connected := state == channels.StateConnected
+			discordInfo = map[string]any{
+				"status":    state.String(),
+				"connected": connected,
+			}
 		} else if discordConfigured {
 			discordInfo = map[string]any{"status": "not_configured", "connected": false}
 		} else {
