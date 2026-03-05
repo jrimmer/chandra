@@ -297,6 +297,11 @@ func run(ctx context.Context, safeMode bool) error {
 		slog.Warn("chandrad: register read_skill failed", "err", err)
 	}
 
+	// Register the write_skill tool so the LLM can draft new skills conversationally.
+	if err := registry.Register(skills.NewWriteSkillTool(skillReg, expandedSkillDir)); err != nil {
+		slog.Warn("chandrad: register write_skill failed", "err", err)
+	}
+
 	// -------------------------------------------------------------------
 	// Step 5c: Initialize infrastructure manager.
 	// -------------------------------------------------------------------

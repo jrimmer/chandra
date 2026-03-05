@@ -77,6 +77,12 @@ func NewDiscord(token string, channelIDs []string) (*Discord, error) {
 		return nil, fmt.Errorf("discord: create session: %w", err)
 	}
 
+	// Set required Gateway intents.
+	// IntentGuildMessages: receive MESSAGE_CREATE events in guild channels.
+	// IntentMessageContent: receive message body (privileged intent; must be
+	// enabled in the Discord Developer Portal under Privileged Gateway Intents).
+	session.Identify.Intents = discordgo.IntentGuildMessages | discordgo.IntentMessageContent
+
 	allowed := make(map[string]struct{}, len(channelIDs))
 	for _, id := range channelIDs {
 		allowed[id] = struct{}{}

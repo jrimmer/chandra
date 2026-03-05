@@ -386,18 +386,24 @@ func Run(ctx context.Context, opts Options) error {
 	}
 
 	// --- Stage 3: Identity ---
+	// The agent name is the persona name, distinct from "Chandra" which is the
+	// platform name. Default to empty so the user is prompted to choose something
+	// that fits their use case (e.g. "Aria", "Max", "Friday").
 	var agentName, agentDescription string
-	agentName = "Chandra"
 	if !cp.IdentityDone {
 		form := huh.NewForm(huh.NewGroup(
-			huh.NewInput().Title("Give your assistant a name").Value(&agentName).Placeholder("Chandra"),
+			huh.NewInput().
+				Title("Name your agent").
+				Description("This is the persona name your agent will use in conversation — not the platform name. E.g. Aria, Max, Friday.").
+				Value(&agentName).
+				Placeholder("e.g. Aria"),
 			huh.NewInput().Title("Brief personality description (optional)").Value(&agentDescription),
 		))
 		if err := form.Run(); err != nil {
 			return err
 		}
 		if agentName == "" {
-			agentName = "Chandra"
+			agentName = "Assistant"
 		}
 		cp.IdentityDone = true
 		cp.AgentName = agentName
@@ -408,7 +414,7 @@ func Run(ctx context.Context, opts Options) error {
 	} else {
 		agentName = cp.AgentName
 		if agentName == "" {
-			agentName = "Chandra"
+			agentName = "Assistant"
 		}
 		agentDescription = cp.AgentDescription
 	}
