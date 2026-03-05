@@ -234,7 +234,7 @@ Each test: record the exact error message. Acceptable = actionable. Not acceptab
 | 1.6.7 | `chandra security audit` on clean install | Passes cleanly | | |
 | 1.6.8 | `chandra security audit` with `open` policy | Warns | | |
 | 1.6.9 | `chandra security audit` with plaintext key in config.toml | Flags it | | |
-| 1.6.10 | Manually `chmod 0644 secrets.toml`, trigger a write | Refuses to write, instructs user to fix permissions | | |
+| 1.6.10 | Manually `chmod 0644 secrets.toml`, trigger a write | Refuses to write, instructs user to fix permissions | ✅ | Daemon refuses to start; error: "insecure permissions 0644…fix with: chmod 600"; clean start after fix |
 
 ---
 

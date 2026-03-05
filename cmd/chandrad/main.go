@@ -109,6 +109,10 @@ func run(ctx context.Context, safeMode bool) error {
 		if err := verifyPermissions(cfgDir, cfgPath); err != nil {
 			return fmt.Errorf("chandrad: permission check failed: %w (fix with: chmod 0700 %s && chmod 0600 %s)", err, cfgDir, cfgPath)
 		}
+		// Refuse to start if secrets.toml exists with insecure permissions.
+		if err := config.CheckSecretsPermissions(cfgDir); err != nil {
+			return fmt.Errorf("chandrad: startup aborted — %w", err)
+		}
 	}
 
 	// -------------------------------------------------------------------

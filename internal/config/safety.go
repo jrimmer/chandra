@@ -8,6 +8,31 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+
+// CheckSecretsPermissions verifies that secrets.toml (if present) has
+// permissions no wider than 0600. Returns a non-nil error if the file exists
+// and has wider permissions, describing the current mode and the required fix.
+// Returns nil if the file is absent (no secrets file = no issue).
+func CheckSecretsPermissions(dir string) error {
+	path := filepath.Join(dir, "secrets.toml")
+	fi, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return nil // no secrets file — nothing to check
+	}
+	if err != nil {
+		return fmt.Errorf("config/safety: stat secrets.toml: %w", err)
+	}
+	mode := fi.Mode().Perm()
+	if mode > 0600 {
+		return fmt.Errorf(
+			"secrets.toml has insecure permissions %04o (must be 0600 or stricter); " +
+				"fix with: chmod 600 %s",
+			mode, path,
+		)
+	}
+	return nil
+}
+
 // SafeWriter handles atomic config writes with backup and rollback.
 type SafeWriter struct {
 	dir string // directory where config.toml lives
@@ -44,6 +69,12 @@ func (w *SafeWriter) tmpPath() string {
 //  3. Write to config.toml.tmp (mode 0600).
 //  4. Atomically rename config.toml.tmp → config.toml.
 func (w *SafeWriter) WriteConfig(content []byte) error {
+	// Pre-flight: refuse to write if secrets.toml has insecure permissions.
+	// An insecure secrets file means credentials could already be exposed;
+	// writing new config in that state would compound the risk.
+	if err := CheckSecretsPermissions(w.dir); err != nil {
+		return fmt.Errorf("config/safety: write blocked — %w", err)
+	}
 	// Step 1: validate content as TOML.
 	var dummy Config
 	if _, err := toml.Decode(string(content), &dummy); err != nil {
