@@ -22,6 +22,8 @@ import (
 
 	"github.com/jrimmer/chandra/internal/access"
 	"github.com/jrimmer/chandra/internal/actionlog"
+	filesystemtool "github.com/jrimmer/chandra/internal/tools/filesystem"
+	shelltool "github.com/jrimmer/chandra/internal/tools/shell"
 	"github.com/jrimmer/chandra/internal/agent"
 	"github.com/jrimmer/chandra/internal/api"
 	"github.com/jrimmer/chandra/internal/budget"
@@ -273,6 +275,15 @@ func run(ctx context.Context, safeMode bool) error {
 	})
 	if err := registry.Register(scheduletool.NewListIntentsTool(inStore, skillCategoryLookup)); err != nil {
 		slog.Warn("chandrad: register list_intents failed", "err", err)
+	}
+	if err := registry.Register(filesystemtool.NewReadFileTool()); err != nil {
+		slog.Warn("chandrad: register read_file failed", "err", err)
+	}
+	if err := registry.Register(filesystemtool.NewWriteFileTool()); err != nil {
+		slog.Warn("chandrad: register write_file failed", "err", err)
+	}
+	if err := registry.Register(shelltool.NewExecTool()); err != nil {
+		slog.Warn("chandrad: register exec failed", "err", err)
 	}
 	if err := registry.Register(scheduletool.NewGetCurrentTimeTool()); err != nil {
 		slog.Warn("chandrad: register get_current_time failed", "err", err)
@@ -1100,6 +1111,21 @@ func registerHandlers(
 	// daemon.start — already running if this handler is reached
 	srv.Handle("daemon.start", func(ctx context.Context, _ json.RawMessage) (any, error) {
 		return map[string]any{"ok": true, "message": "daemon already running"}, nil
+	})
+
+	// daemon.restart — gracefully replaces the current process with a fresh
+	// instance of the same binary. Used by the agent to self-restart after
+	// installing a new binary. The response is sent before exec.
+	srv.Handle("daemon.restart", func(ctx context.Context, _ json.RawMessage) (any, error) {
+		go func() {
+			// Brief delay to allow the response to be flushed to the client.
+			time.Sleep(300 * time.Millisecond)
+			slog.Info("chandrad: daemon.restart: re-execing")
+			if err := syscall.Exec(os.Args[0], os.Args, os.Environ()); err != nil {
+				slog.Error("chandrad: daemon.restart: exec failed", "err", err)
+			}
+		}()
+		return map[string]any{"status": "restarting", "binary": os.Args[0]}, nil
 	})
 
 	// daemon.stop — triggers graceful shutdown via context cancel.
