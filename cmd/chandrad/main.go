@@ -254,6 +254,9 @@ func run(ctx context.Context, safeMode bool) error {
 	if err := registry.Register(scheduletool.NewScheduleReminderTool(inStore)); err != nil {
 		slog.Warn("chandrad: register schedule_reminder failed", "err", err)
 	}
+	if err := registry.Register(scheduletool.NewListRemindersTool(inStore)); err != nil {
+		slog.Warn("chandrad: register list_reminders failed", "err", err)
+	}
 	if err := registry.Register(scheduletool.NewGetCurrentTimeTool()); err != nil {
 		slog.Warn("chandrad: register get_current_time failed", "err", err)
 	}
