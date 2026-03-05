@@ -50,6 +50,7 @@ func (m *mockIntent) Update(_ context.Context, _ intent.Intent) error       { re
 func (m *mockIntent) Active(_ context.Context) ([]intent.Intent, error)     { return nil, nil }
 func (m *mockIntent) Due(_ context.Context) ([]intent.Intent, error)        { return nil, nil }
 func (m *mockIntent) Complete(_ context.Context, _ string) error            { return nil }
+func (m *mockIntent) Reschedule(_ context.Context, _ string, _ time.Time) error { return nil }
 
 var _ intent.IntentStore = (*mockIntent)(nil)
 

@@ -498,10 +498,22 @@ func run(ctx context.Context, safeMode bool) error {
 								Content:   resp,
 							})
 						}
-						// Mark one-shot intents (condition="time") complete so they
-						// do not re-fire on every scheduler tick.
-						if err := inStore.Complete(ctx, turn.IntentID); err != nil {
-							slog.Warn("scheduler: failed to complete intent", "id", turn.IntentID, "err", err)
+						// Recurring vs one-shot: if the intent has a recurrence interval,
+						// advance next_check instead of completing.
+						if turn.RecurrenceInterval > 0 {
+							nextCheck := time.Now().Add(turn.RecurrenceInterval)
+							if err := inStore.Reschedule(ctx, turn.IntentID, nextCheck); err != nil {
+								slog.Warn("scheduler: failed to reschedule recurring intent",
+									"id", turn.IntentID, "next", nextCheck, "err", err)
+							} else {
+								slog.Info("scheduler: rescheduled recurring intent",
+									"id", turn.IntentID, "next", nextCheck.Format(time.RFC3339))
+							}
+						} else {
+							// One-shot: complete so it does not re-fire on every tick.
+							if err := inStore.Complete(ctx, turn.IntentID); err != nil {
+								slog.Warn("scheduler: failed to complete intent", "id", turn.IntentID, "err", err)
+							}
 						}
 					}
 				case <-ctx.Done():

@@ -141,6 +141,7 @@ func (f *failingIntentStore) Active(_ context.Context) ([]intent.Intent, error) 
 	return nil, nil
 }
 func (f *failingIntentStore) Due(_ context.Context) ([]intent.Intent, error) { return nil, nil }
+func (f *failingIntentStore) Reschedule(_ context.Context, _ string, _ time.Time) error { return nil }
 func (f *failingIntentStore) Complete(_ context.Context, _ string) error {
 	return nil
 }

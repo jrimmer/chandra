@@ -20,6 +20,9 @@ type ScheduledTurn struct {
 	// Delivery target: populated from the intent's channel_id / user_id.
 	ChannelID string
 	UserID    string
+	// RecurrenceInterval > 0: intent repeats; advance next_check by this duration.
+	// Zero: one-shot; complete the intent after this turn.
+	RecurrenceInterval time.Duration
 }
 
 // Scheduler defines the contract for the tick-based intent evaluation engine.
@@ -123,11 +126,12 @@ func (s *scheduler) tick(ctx context.Context) {
 		}
 
 		turn := ScheduledTurn{
-			IntentID:  in.ID,
-			Prompt:    in.Action,
-			SessionID: "scheduler",
-			ChannelID: in.ChannelID,
-			UserID:    in.UserID,
+			IntentID:           in.ID,
+			Prompt:             in.Action,
+			SessionID:          "scheduler",
+			ChannelID:          in.ChannelID,
+			UserID:             in.UserID,
+			RecurrenceInterval: in.RecurrenceInterval,
 		}
 
 		// Non-blocking send: drop and warn if the channel is full.
