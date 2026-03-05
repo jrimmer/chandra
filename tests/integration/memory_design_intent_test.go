@@ -163,6 +163,11 @@ func TestDesignIntent_SemanticReinforcement_RememberKeyword(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NotEmpty(t, entries, "semantic store must contain an entry after 'remember' turn")
+	// Assert the correct entry was retrieved, not just that something came back.
+	// With hybrid BM25+vector search, "sister name" must prefer the entry that
+	// actually contains "Harriet" over any other stored content.
+	assert.Contains(t, entries[0].Content, "Harriet",
+		"top result must be the planted memory entry; got: %q", entries[0].Content)
 	assert.GreaterOrEqual(t, entries[0].Importance, float32(0.79),
 		"reinforced memory should have importance ≥ 0.8, got %f", entries[0].Importance)
 }

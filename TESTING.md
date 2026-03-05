@@ -4,7 +4,7 @@
 > Combines happy-path verification with deliberate adversarial and chaos testing.
 > Doubles as a checklist and context document for test sessions.
 
-**Version:** 2.1 — 2026-03-05
+**Version:** 2.2 — 2026-03-05
 
 ---
 
@@ -13,6 +13,60 @@
 The automated suite runs with `go test ./...` and must pass before any merge to `main`.
 The one known exception is `TestSemanticSearch_10k_Under100ms` (ANN perf, tracked separately).
 
+### Semantic Memory Testing Strategy
+
+Memory is the most architecturally significant component of Chandra, and it presents a
+unique testing challenge: behavior depends on retrieval *quality* (does the right thing
+come back in the right rank?) not just retrieval *existence* (does anything come back?).
+
+**The mock embedder problem**
+
+Unit and integration tests use mock embedding providers rather than real Ollama (no
+network, deterministic, fast). The simplest mock — `fixedEmbedder` — returns the same
+fixed vector (`0.1` across all dims) for every input. This is sufficient for testing
+*storage lifecycle*: does a `"remember"` keyword trigger a store? Does a short turn get
+filtered out? Does a fact persist across sessions?
+
+It is not sufficient for testing *retrieval ranking*: with identical vectors for every
+document, cosine distance is 0 for all pairs and vector KNN returns results in insertion
+order. Ranking cannot be meaningfully tested.
+
+**The hybrid search gap (surfaced 2026-03-05)**
+
+When hybrid BM25+vector retrieval was introduced (migration 007), this limitation became
+a real blind spot. Two ranking paths now exist:
+
+- **BM25 (FTS5):** ranks by keyword overlap — works correctly even with `fixedEmbedder`
+  because it uses text content, not vectors.
+- **Vector KNN:** ranks by semantic similarity — blind with `fixedEmbedder` since all
+  distances are equal.
+
+BM25 gets meaningful exercise with `fixedEmbedder` (a query for "sister name" does
+prefer entries containing those words). But the vector path is never tested for ranking
+correctness, and the RRF fusion that merges both paths has no integration-level coverage.
+
+Additionally, the existing design intent test `TestDesignIntent_SemanticReinforcement_RememberKeyword`
+only asserted `require.NotEmpty` — correct entry vs wrong entry was indistinguishable.
+
+**`rankedEmbedder` — the fix**
+
+`tests/integration/memory_hybrid_test.go` introduces `rankedEmbedder`: a mock using
+FNV-1a word hashing to produce vectors where texts sharing vocabulary get similar vectors
+and texts with different vocabulary get different vectors. No Ollama required.
+
+Design: each word contributes 1.0 to the vector dimension at `fnv32a(word) % dims`. The
+vector is L2-normalised. Texts sharing words → overlapping active dimensions → smaller
+cosine distance → higher similarity rank.
+
+**Three-tier memory testing model**
+
+| Tier | File | Embedder | What it validates |
+|------|------|----------|-------------------|
+| **Unit** | `internal/memory/semantic/semantic_test.go` | Per-dimension unit vectors | BM25 boost, RRF fusion correctness, special char sanitisation, fallback to vector-only |
+| **Integration — ranking** | `tests/integration/memory_hybrid_test.go` | `rankedEmbedder` (FNV word hash) | Correct entry surfaces from diverse pool; recall under 30-entry noise; migration backfill; rankedEmbedder sanity |
+| **Integration — lifecycle** | `tests/integration/memory_design_intent_test.go` | `fixedEmbedder` (same vector) | Storage triggers, importance scoring, budget pressure, episodic continuity, session boundary |
+| **System (Phase 3)** | Manual + Ollama | Real `nomic-embed-text` | End-to-end quality over time; 3.1.3 semantic relevance; 3.1.8 noise flood |
+
 ### Unit Tests
 
 | Package | Tests | What they cover |
@@ -20,7 +74,7 @@ The one known exception is `TestSemanticSearch_10k_Under100ms` (ANN perf, tracke
 | `internal/memory/episodic` | 7 | Append/Recent, Since, tag round-trip, session isolation, `RecentAcrossSessions` (multi-session, limit, empty) |
 | `internal/memory/identity` | 5 | Agent profile, user profile, relationship state, OngoingContext max-items cap |
 | `internal/memory/intent` | 6 | Create/Active, Due (past/future/completed), Complete, Update |
-| `internal/memory/semantic` | 4 | Store/Query, QueryText, StoreBatch, score mapping |
+| `internal/memory/semantic` | 9 | Store/Query, QueryText, StoreBatch, score mapping; hybrid: keyword boost, dual-path RRF boost, BM25 fallback, special char sanitisation, RRF score exposure |
 | `internal/agent` (loop) | 16 | Basic turn, tool calls, max-rounds, semantic storage, memory retrieval, scheduled turns, action log, prompt injection, message ordering, tool allowlist |
 | `internal/agent` (session) | 9 | New session, resume active, expired→new, Touch, Close, Get, ActiveCount, max-concurrent, concurrent GetOrCreate, CleanupExpired |
 | `skills/context` | 8 | NoteContext: add, deduplicate, multi-item, reject empty; ForgetContext: exact match, substring match, no-match graceful; design intent round-trip to relationship store |
@@ -54,6 +108,20 @@ All wire real SQLite + real memory stores + mock LLM provider (no network calls)
 | `TestDesignIntent_Gap3_EmbeddingsConfigActivatesRealSemanticStore` | Gap 3 | `semantic.NewStore(db, embedder)` produces a working store; Store + QueryText round-trip succeeds |
 | `TestDesignIntent_Gap3_NoopStoreDiscardsEverything` | Gap 3 | Baseline: noop store silently discards all entries; QueryText always returns [] |
 | `TestDesignIntent_Gap3_AgentStoresTurnInRealSemanticStore` | Gap 3 | Agent loop `maybeSemanticallyStore` path writes to the real store; QueryText retrieves it |
+
+
+#### `memory_hybrid_test.go` — Hybrid retrieval ranking & correctness (2026-03-05)
+
+Uses `rankedEmbedder` (FNV word-hash) so both BM25 and vector KNN contribute
+meaningful signal. These tests verify retrieval *quality*, not just retrieval *existence*.
+
+| Test | What it verifies |
+|------|-----------------|
+| `TestMemory_RankedEmbedder_SimilarTextsScore` | Sanity: `rankedEmbedder` produces smaller cosine distance for similar texts than for dissimilar texts — prerequisite for ranking tests to mean anything |
+| `TestMemory_HybridRankingSelectsRelevantEntry` | 10 topically diverse stored entries; query on one topic; assert correct entry ranks #1 |
+| `TestMemory_BackfillEnablesBM25ForPreexistingRows` | Simulates pre-007 rows (in `memory_entries` but not `memory_fts`); runs migration 007 backfill SQL; asserts BM25 finds them |
+| `TestMemory_RecallUnderNoise` | 30 noise entries + 1 target with unique keywords; assert target appears in top 5 |
+| `TestMemory_RememberKeyword_RetrievesCorrectEntry` | Hardens `SemanticReinforcement` design intent: asserts the *correct* entry is #1 (not just non-empty), with distractors stored to make retrieval non-trivial |
 
 #### `budget_adversarial_test.go`, `scheduler_test.go`, `skills_test.go`, `skill_generation_test.go`, `infrastructure_test.go`
 Covered separately — see file headers for descriptions.
