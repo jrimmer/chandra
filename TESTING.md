@@ -142,7 +142,7 @@ Use a dedicated test server — not production. The adversarial tests will gener
 |---|------|----------|-------|-------|
 | 1.1.1 | Run curl installer on fresh VM | Binary installed, `chandra --version` works | | |
 | 1.1.2 | Binary in `$PATH` without manual steps | `chandra` resolves from any directory | | |
-| 1.1.3 | Run `chandra` with no config | Friendly "run chandra init" message, no stack trace | | |
+| 1.1.3 | Run `chandra` with no config | Friendly "run chandra init" message, no stack trace | ⚠ | `chandra` shows generic help; `chandrad` shows permission error. Neither nudges toward `chandra init` |
 | 1.1.4 | Run installer twice | Idempotent — doesn't break existing install | | |
 | 1.1.5 | Installer on low-disk VM (< 100MB free) | Clear disk space error, not a silent partial install | | |
 
@@ -154,16 +154,16 @@ Follow SETUP.md §1 literally. No prior knowledge — if the docs don't say it, 
 
 | # | Test | Expected | Pass? | Notes |
 |---|------|----------|-------|-------|
-| 1.2.1 | Run `chandra init` | Welcome screen, provider selection | | |
-| 1.2.2 | Enter API key | Input masked (no echo), connection test passes | | |
-| 1.2.3 | Select Discord, enter bot token | Masked input, bot online confirmed | | |
+| 1.2.1 | Run `chandra init` | Welcome screen, provider selection | ✅ | Welcome screen rendered; provider list with all options |
+| 1.2.2 | Enter API key | Input masked (no echo), connection test passes | ✅ | Key masked as ****; connection verified |
+| 1.2.3 | Select Discord, enter bot token | Masked input, bot online confirmed | ✅ | Token masked as ****; bot connected |
 | 1.2.4 | OAuth2 invite URL generated | Correct permissions pre-selected | | |
-| 1.2.5 | Hello World loop | Message in `#chandra-test`, reply received, user added to allowlist | | |
-| 1.2.6 | Config written at 0600 | `config.toml` and `secrets.toml` both 0600 | | |
-| 1.2.7 | Config dir at 0700 | `~/.config/chandra/` is 0700 | | |
-| 1.2.8 | DB initialized cleanly | `chandra.db` exists, no migration errors in log | | |
+| 1.2.5 | Hello World loop | Message in `#chandra-test`, reply received, user added to allowlist | ✅ | Bot Hi message sent; reply-to matched; user added; Full loop confirmed |
+| 1.2.6 | Config written at 0600 | `config.toml` and `secrets.toml` both 0600 | ✅ | config.toml: 0600 confirmed |
+| 1.2.7 | Config dir at 0700 | `~/.config/chandra/` is 0700 | ✅ | drwx------ confirmed |
+| 1.2.8 | DB initialized cleanly | `chandra.db` exists, no migration errors in log | ✅ | chandra.db created; all migrations applied |
 | 1.2.9 | Daemon install offered and accepted | systemd unit generated, daemon starts, persists after logout | | |
-| 1.2.10 | Doctor pass at end of init | All checks green | | |
+| 1.2.10 | Doctor pass at end of init | All checks green | ✅ | "Everything looks good. Chandra is ready." — all 8 checks green |
 | 1.2.11 | Console opens | `chandra console` launches immediately after init | | |
 
 ---
@@ -174,17 +174,17 @@ Each test: record the exact error message. Acceptable = actionable. Not acceptab
 
 | # | Test | Expected | Pass? | Error output |
 |---|------|----------|-------|--------------|
-| 1.3.1 | Wrong API key | Auth error + `chandra auth add` hint | | |
+| 1.3.1 | Wrong API key | Auth error + `chandra auth add` hint | ✅ | "API key invalid (401 Unauthorized) — check CHANDRA_API_KEY or provider.api_key" |
 | 1.3.2 | Revoked Discord bot token | Clear error, not raw 401 | | |
 | 1.3.3 | Bot not invited to server | Useful message, not a timeout | | |
 | 1.3.4 | Network down during provider test | Timeout error with suggestion | | |
 | 1.3.5 | HTTP (not HTTPS) custom provider URL | Rejected before any request is made | | |
 | 1.3.6 | RFC-1918 custom provider URL | Rejected with SSRF guard message | | |
-| 1.3.7 | Hello World timeout (don't reply 2 min) | Config saved, flagged unverified, retry suggested | | |
-| 1.3.8 | Ctrl+C after provider step | Checkpoint saved cleanly | | |
-| 1.3.9 | Resume interrupted init | Detected, progress preserved, offered to continue | | |
-| 1.3.10 | Run init when config exists | Reconfigure/fresh-start/cancel offered | | |
-| 1.3.11 | `allowed_users = []` in resulting config | Daemon refuses to start, clear error | | |
+| 1.3.7 | Hello World timeout (don't reply 2 min) | Config saved, flagged unverified, retry suggested | ✅ | "No reply received. Config saved, but channel loop is unverified. Run chandra channel test discord" |
+| 1.3.8 | Ctrl+C after provider step | Checkpoint saved cleanly | ✅ | .init-checkpoint.json written with all stages marked; config NOT written (interrupted before Stage 4) |
+| 1.3.9 | Resume interrupted init | Detected, progress preserved, offered to continue | ✅ | "Previous setup session found. Progress: provider done · channels done · identity done · config pending" |
+| 1.3.10 | Run init when config exists | Reconfigure/fresh-start/cancel offered | ✅ | Three options shown: Update credentials / Fresh start / Cancel |
+| 1.3.11 | `allowed_users = []` in resulting config | Daemon refuses to start, clear error | ✅ | "no authorized users in DB — bot would lock everyone out" with fix instructions |
 | 1.3.12 | Disk full during config write | Handled gracefully, no partial/corrupt config left | | |
 | 1.3.13 | Init with no terminal (piped input) | Clear error or graceful non-interactive fallback | | |
 
