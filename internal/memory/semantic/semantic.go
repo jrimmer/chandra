@@ -40,10 +40,12 @@ type SemanticStore interface {
 	Store(ctx context.Context, entry pkg.MemoryEntry) error
 	StoreBatch(ctx context.Context, entries []pkg.MemoryEntry) error
 	// Query retrieves entries by pre-computed embedding (pure vector KNN).
-	Query(ctx context.Context, embedding []float32, topN int) ([]pkg.MemoryEntry, error)
+	// Pass userID="" to return all entries regardless of owner (admin/CLI use).
+	Query(ctx context.Context, embedding []float32, topN int, userID string) ([]pkg.MemoryEntry, error)
 	// QueryText retrieves entries using hybrid BM25+vector fusion.
 	// Prefer QueryText over Query for text inputs — it produces better recall.
-	QueryText(ctx context.Context, text string, topN int) ([]pkg.MemoryEntry, error)
+	// Pass userID="" to return all entries regardless of owner (admin/CLI use).
+	QueryText(ctx context.Context, text string, topN int, userID string) ([]pkg.MemoryEntry, error)
 }
 
 // Compile-time assertion that *Store satisfies SemanticStore.
@@ -209,8 +211,8 @@ func (s *Store) StoreBatch(ctx context.Context, entries []pkg.MemoryEntry) error
 // Query retrieves the topN most semantically similar MemoryEntries using
 // pure vector KNN (cosine distance via sqlite-vec). Use QueryText when you
 // have a raw text query — hybrid retrieval produces better results.
-func (s *Store) Query(ctx context.Context, embedding []float32, topN int) ([]pkg.MemoryEntry, error) {
-	return s.vectorQuery(ctx, embedding, topN)
+func (s *Store) Query(ctx context.Context, embedding []float32, topN int, userID string) ([]pkg.MemoryEntry, error) {
+	return s.vectorQuery(ctx, embedding, topN, userID)
 }
 
 // QueryText retrieves entries using hybrid BM25+vector fusion.
@@ -223,7 +225,8 @@ func (s *Store) Query(ctx context.Context, embedding []float32, topN int) ([]pkg
 //
 // Falls back to pure vector search if FTS5 is unavailable or the query
 // contains no indexable tokens.
-func (s *Store) QueryText(ctx context.Context, text string, topN int) ([]pkg.MemoryEntry, error) {
+// Pass userID="" to return entries for all users (admin/CLI use).
+func (s *Store) QueryText(ctx context.Context, text string, topN int, userID string) ([]pkg.MemoryEntry, error) {
 	if topN <= 0 {
 		return nil, nil
 	}
@@ -246,7 +249,7 @@ func (s *Store) QueryText(ctx context.Context, text string, topN int) ([]pkg.Mem
 	}()
 
 	// BM25 search runs while embedding is in flight.
-	bm25Results, bm25Err := s.bm25Query(ctx, text, candidate)
+	bm25Results, bm25Err := s.bm25Query(ctx, text, candidate, userID)
 
 	// Wait for embedding.
 	er := <-embedCh
@@ -255,7 +258,7 @@ func (s *Store) QueryText(ctx context.Context, text string, topN int) ([]pkg.Mem
 	}
 
 	// Vector search with the embedding.
-	vectorResults, vecErr := s.vectorQuery(ctx, er.embedding, candidate)
+	vectorResults, vecErr := s.vectorQuery(ctx, er.embedding, candidate, userID)
 
 	// If both searches failed, propagate the vector error (more reliable).
 	if vecErr != nil && bm25Err != nil {
@@ -271,7 +274,7 @@ func (s *Store) QueryText(ctx context.Context, text string, topN int) ([]pkg.Mem
 // Returns at most limit results, ordered by BM25 score descending.
 // Returns nil (not an error) when the FTS table doesn't exist yet or the
 // query contains no indexable tokens.
-func (s *Store) bm25Query(ctx context.Context, text string, limit int) ([]pkg.MemoryEntry, error) {
+func (s *Store) bm25Query(ctx context.Context, text string, limit int, userID string) ([]pkg.MemoryEntry, error) {
 	// Sanitise query: FTS5 MATCH syntax is strict — wrap phrase in quotes for
 	// simple safety, strip characters that break the parser.
 	ftsQuery := sanitiseFTSQuery(text)
@@ -279,16 +282,32 @@ func (s *Store) bm25Query(ctx context.Context, text string, limit int) ([]pkg.Me
 		return nil, nil
 	}
 
-	const q = `
-		SELECT m.id, m.content, m.source, m.timestamp, m.importance,
-		       -bm25(memory_fts) AS score
-		FROM memory_fts
-		JOIN memory_entries m ON m.id = memory_fts.id
-		WHERE memory_fts MATCH ?
-		ORDER BY score DESC
-		LIMIT ?`
+	var q string
+	var args []any
+	if userID != "" {
+		q = `
+			SELECT m.id, m.user_id, m.content, m.source, m.timestamp, m.importance,
+			       -bm25(memory_fts) AS score
+			FROM memory_fts
+			JOIN memory_entries m ON m.id = memory_fts.id
+			WHERE memory_fts MATCH ?
+			  AND m.user_id = ?
+			ORDER BY score DESC
+			LIMIT ?`
+		args = []any{ftsQuery, userID, limit}
+	} else {
+		q = `
+			SELECT m.id, m.user_id, m.content, m.source, m.timestamp, m.importance,
+			       -bm25(memory_fts) AS score
+			FROM memory_fts
+			JOIN memory_entries m ON m.id = memory_fts.id
+			WHERE memory_fts MATCH ?
+			ORDER BY score DESC
+			LIMIT ?`
+		args = []any{ftsQuery, limit}
+	}
 
-	rows, err := s.db.QueryContext(ctx, q, ftsQuery, limit)
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		// FTS table may not exist (pre-migration DB) or query may be invalid —
 		// treat as empty result rather than hard failure.
@@ -300,22 +319,41 @@ func (s *Store) bm25Query(ctx context.Context, text string, limit int) ([]pkg.Me
 }
 
 // vectorQuery performs KNN search over memory_embeddings using sqlite-vec.
-func (s *Store) vectorQuery(ctx context.Context, embedding []float32, topN int) ([]pkg.MemoryEntry, error) {
+func (s *Store) vectorQuery(ctx context.Context, embedding []float32, topN int, userID string) ([]pkg.MemoryEntry, error) {
 	serialized := store.SerializeFloat32(embedding)
 
-	const q = `
-		SELECT m.id, m.content, m.source, m.timestamp, m.importance,
-		       v.distance
-		FROM (
-		    SELECT id, distance
-		    FROM memory_embeddings
-		    WHERE embedding MATCH ? AND k = ?
-		    ORDER BY distance
-		) v
-		JOIN memory_entries m ON m.id = v.id
-		ORDER BY v.distance ASC`
+	var q string
+	var args []any
+	if userID != "" {
+		q = `
+			SELECT m.id, m.user_id, m.content, m.source, m.timestamp, m.importance,
+			       v.distance
+			FROM (
+			    SELECT id, distance
+			    FROM memory_embeddings
+			    WHERE embedding MATCH ? AND k = ?
+			    ORDER BY distance
+			) v
+			JOIN memory_entries m ON m.id = v.id
+			WHERE m.user_id = ?
+			ORDER BY v.distance ASC`
+		args = []any{serialized, topN, userID}
+	} else {
+		q = `
+			SELECT m.id, m.user_id, m.content, m.source, m.timestamp, m.importance,
+			       v.distance
+			FROM (
+			    SELECT id, distance
+			    FROM memory_embeddings
+			    WHERE embedding MATCH ? AND k = ?
+			    ORDER BY distance
+			) v
+			JOIN memory_entries m ON m.id = v.id
+			ORDER BY v.distance ASC`
+		args = []any{serialized, topN}
+	}
 
-	rows, err := s.db.QueryContext(ctx, q, serialized, topN)
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("semantic: vector query: %w", err)
 	}
@@ -335,7 +373,7 @@ func scanMemoryRows(rows *sql.Rows, scoreIsRaw bool) ([]pkg.MemoryEntry, error) 
 		var ts int64
 		var rawScore float32
 
-		if err := rows.Scan(&entry.ID, &entry.Content, &entry.Source, &ts, &entry.Importance, &rawScore); err != nil {
+		if err := rows.Scan(&entry.ID, &entry.UserID, &entry.Content, &entry.Source, &ts, &entry.Importance, &rawScore); err != nil {
 			return nil, fmt.Errorf("semantic: scan row: %w", err)
 		}
 		entry.Timestamp = time.Unix(ts, 0).UTC()

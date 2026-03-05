@@ -34,10 +34,10 @@ type mockSemantic struct{}
 
 func (m *mockSemantic) Store(_ context.Context, _ pkg.MemoryEntry) error              { return nil }
 func (m *mockSemantic) StoreBatch(_ context.Context, _ []pkg.MemoryEntry) error       { return nil }
-func (m *mockSemantic) Query(_ context.Context, _ []float32, _ int) ([]pkg.MemoryEntry, error) {
+func (m *mockSemantic) Query(_ context.Context, _ []float32, _ int, _ string) ([]pkg.MemoryEntry, error) {
 	return nil, nil
 }
-func (m *mockSemantic) QueryText(_ context.Context, _ string, _ int) ([]pkg.MemoryEntry, error) {
+func (m *mockSemantic) QueryText(_ context.Context, _ string, _ int, _ string) ([]pkg.MemoryEntry, error) {
 	return nil, nil
 }
 

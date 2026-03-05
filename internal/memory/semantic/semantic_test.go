@@ -89,7 +89,7 @@ func TestSemanticStore_StoreAndQuery(t *testing.T) {
 	}
 
 	// Query with the "alpha" embedding — should return "alpha" first.
-	results, err := s.Query(ctx, makeVec(dims, 0, 1.0), 3)
+	results, err := s.Query(ctx, makeVec(dims, 0, 1.0), 3, "")
 	require.NoError(t, err)
 	require.NotEmpty(t, results)
 	assert.Equal(t, "alpha", results[0].Content)
@@ -114,7 +114,7 @@ func TestSemanticStore_QueryText(t *testing.T) {
 	require.NoError(t, s.Store(ctx, entry))
 
 	priorCalls := emb.callCount
-	results, err := s.QueryText(ctx, content, 5)
+	results, err := s.QueryText(ctx, content, 5, "")
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	// At least one more Embed call for the query text embedding.
@@ -213,7 +213,7 @@ func TestSemanticStore_PresetIDAndImportance(t *testing.T) {
 	err = s.Store(context.Background(), entry)
 	require.NoError(t, err)
 
-	results, err := s.Query(context.Background(), makeVec(1536, 1, 1.0), 1)
+	results, err := s.Query(context.Background(), makeVec(1536, 1, 1.0), 1, "")
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	assert.Equal(t, "preset-id-123", results[0].ID)
@@ -267,7 +267,7 @@ func TestQueryText_HybridBoostsExactKeyword(t *testing.T) {
 	require.NoError(t, s.Store(ctx, pkg.MemoryEntry{Content: "coffee meeting tomorrow", Source: "test", Timestamp: time.Now()}))
 	require.NoError(t, s.Store(ctx, pkg.MemoryEntry{Content: "jazz concert at the venue", Source: "test", Timestamp: time.Now()}))
 
-	results, err := s.QueryText(ctx, "query text coffee", 2)
+	results, err := s.QueryText(ctx, "query text coffee", 2, "")
 	require.NoError(t, err)
 	require.NotEmpty(t, results)
 
@@ -307,7 +307,7 @@ func TestQueryText_BothPathsContribute(t *testing.T) {
 	require.NoError(t, s.Store(ctx, pkg.MemoryEntry{Content: "the cat sat on the mat", Source: "test", Timestamp: time.Now()}))
 	require.NoError(t, s.Store(ctx, pkg.MemoryEntry{Content: "the dog barked loudly", Source: "test", Timestamp: time.Now()}))
 
-	results, err := s.QueryText(ctx, "cat query", 2)
+	results, err := s.QueryText(ctx, "cat query", 2, "")
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(results), 1)
 
@@ -337,7 +337,7 @@ func TestQueryText_FallsBackWhenFTSEmpty(t *testing.T) {
 	require.NoError(t, s.Store(ctx, pkg.MemoryEntry{Content: "stored document", Source: "test", Timestamp: time.Now()}))
 
 	// Query with a string that won't match FTS (gibberish) but vector is close.
-	results, err := s.QueryText(ctx, "xqzjkv nopqr", 1)
+	results, err := s.QueryText(ctx, "xqzjkv nopqr", 1, "")
 	require.NoError(t, err)
 	// Should still get the vector result even with no BM25 hits.
 	require.NotEmpty(t, results, "should fall back to vector results when BM25 finds nothing")
@@ -359,7 +359,7 @@ func TestQueryText_SpecialCharactersInQuery(t *testing.T) {
 	require.NoError(t, s.Store(ctx, pkg.MemoryEntry{Content: "normal text", Source: "test", Timestamp: time.Now()}))
 
 	// Should not panic or return error on FTS-special characters.
-	_, err = s.QueryText(ctx, `query "with" special: chars* (and) [brackets]`, 1)
+	_, err = s.QueryText(ctx, `query "with" special: chars* (and) [brackets]`, 1, "")
 	assert.NoError(t, err, "special characters in query should be sanitised, not cause errors")
 }
 
@@ -380,7 +380,7 @@ func TestQueryText_RRFScoresExposed(t *testing.T) {
 	require.NoError(t, s.Store(ctx, pkg.MemoryEntry{Content: "keyword and vector match", Source: "t", Timestamp: time.Now()}))
 	require.NoError(t, s.Store(ctx, pkg.MemoryEntry{Content: "only keyword match", Source: "t", Timestamp: time.Now()}))
 
-	results, err := s.QueryText(ctx, "the quick brown fox", 2)
+	results, err := s.QueryText(ctx, "the quick brown fox", 2, "")
 	require.NoError(t, err)
 
 	// All returned entries should have a positive RRF score.

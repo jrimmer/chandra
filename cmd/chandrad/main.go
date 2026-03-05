@@ -993,7 +993,7 @@ func registerHandlers(
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("memory.search: invalid params: %w", err)
 		}
-		entries, err := mem.Semantic().QueryText(ctx, p.Query, 10)
+		entries, err := mem.Semantic().QueryText(ctx, p.Query, 10, "") // "" = no user filter (admin CLI)
 		if err != nil {
 			return nil, fmt.Errorf("memory.search: %w", err)
 		}
@@ -1482,10 +1482,10 @@ type noopSemanticStore struct{}
 
 func (n *noopSemanticStore) Store(_ context.Context, _ pkg.MemoryEntry) error { return nil }
 func (n *noopSemanticStore) StoreBatch(_ context.Context, _ []pkg.MemoryEntry) error { return nil }
-func (n *noopSemanticStore) Query(_ context.Context, _ []float32, _ int) ([]pkg.MemoryEntry, error) {
+func (n *noopSemanticStore) Query(_ context.Context, _ []float32, _ int, _ string) ([]pkg.MemoryEntry, error) {
 	return nil, nil
 }
-func (n *noopSemanticStore) QueryText(_ context.Context, _ string, _ int) ([]pkg.MemoryEntry, error) {
+func (n *noopSemanticStore) QueryText(_ context.Context, _ string, _ int, _ string) ([]pkg.MemoryEntry, error) {
 	return nil, nil
 }
 

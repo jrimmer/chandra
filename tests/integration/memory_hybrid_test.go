@@ -217,7 +217,7 @@ func TestMemory_HybridRankingSelectsRelevantEntry(t *testing.T) {
 	}
 
 	// Query on emergency contact — specific enough that only entry[4] matches well.
-	results, err := sem.QueryText(ctx, "emergency contact phone number", 5)
+	results, err := sem.QueryText(ctx, "emergency contact phone number", 5, "")
 	require.NoError(t, err)
 	require.NotEmpty(t, results, "query must return at least one result")
 
@@ -354,7 +354,7 @@ func TestMemory_RecallUnderNoise(t *testing.T) {
 	storeEntry(t, sem, ctx, targetContent, "target")
 
 	// Query using keywords specific to the target.
-	results, err := sem.QueryText(ctx, "kubernetes telemetry dashboard prometheus grafana", 5)
+	results, err := sem.QueryText(ctx, "kubernetes telemetry dashboard prometheus grafana", 5, "")
 	require.NoError(t, err)
 	require.NotEmpty(t, results, "recall under noise must return at least one result")
 
@@ -414,7 +414,7 @@ func TestMemory_RememberKeyword_RetrievesCorrectEntry(t *testing.T) {
 	storeEntry(t, sem, ctx, target, "conversation")
 
 	// Query that matches only the target vocabulary.
-	results, err := sem.QueryText(ctx, "sister name family", 5)
+	results, err := sem.QueryText(ctx, "sister name family", 5, "")
 	require.NoError(t, err)
 	require.NotEmpty(t, results, "semantic store must return results for 'sister name family'")
 

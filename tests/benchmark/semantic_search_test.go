@@ -156,7 +156,7 @@ func BenchmarkSemanticSearch_10k(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_, err := sem.QueryText(ctx, "benchmark test query", searchTopN)
+		_, err := sem.QueryText(ctx, "benchmark test query", searchTopN, "")
 		if err != nil {
 			b.Fatalf("QueryText: %v", err)
 		}
@@ -202,7 +202,7 @@ func TestSemanticSearch_10k_Under100ms(t *testing.T) {
 
 	for _, q := range queries {
 		start := time.Now()
-		results, err := sem.QueryText(ctx, q, searchTopN)
+		results, err := sem.QueryText(ctx, q, searchTopN, "")
 		elapsed := time.Since(start)
 
 		if err != nil {

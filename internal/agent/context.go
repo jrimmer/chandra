@@ -34,7 +34,7 @@ func assembleContext(
 	// Step 2: Retrieve semantic memories relevant to the incoming message.
 	var ranked []budget.ContextCandidate
 	if mem != nil {
-		semanticMems, err := mem.Semantic().QueryText(ctx, msg.Content, 5)
+		semanticMems, err := mem.Semantic().QueryText(ctx, msg.Content, 5, msg.UserID)
 		if err != nil {
 			slog.Warn("agent/context: failed to query semantic memory", "error", err)
 		}

@@ -62,7 +62,7 @@ func TestIntegration_CBM_Adversarial(t *testing.T) {
 	// 4. Query all seeded memories to build ranked candidates.
 	// Using totalMemories as the limit ensures the CBM receives more candidates
 	// than fit in the budget, forcing it to drop entries — the adversarial scenario.
-	memories, err := semStore.QueryText(ctx, "test query for adversarial scenario", totalMemories)
+	memories, err := semStore.QueryText(ctx, "test query for adversarial scenario", totalMemories, "")
 	if err != nil {
 		t.Fatalf("semStore.QueryText: %v", err)
 	}

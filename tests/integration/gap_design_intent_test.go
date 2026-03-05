@@ -294,7 +294,7 @@ func TestDesignIntent_Gap3_EmbeddingsConfigActivatesRealSemanticStore(t *testing
 		"real semantic store must accept Store() without error")
 
 	// QueryText must return the stored entry — noop always returns [].
-	results, err := semStore.QueryText(ctx, "dog named", 5)
+	results, err := semStore.QueryText(ctx, "dog named", 5, "")
 	require.NoError(t, err)
 	require.NotEmpty(t, results,
 		"QueryText must return results after Store() — if empty, the noop store is active instead of the real one")
@@ -321,7 +321,7 @@ type noopSemStore struct{}
 
 func (n *noopSemStore) Store(_ context.Context, _ pkg.MemoryEntry) error      { return nil }
 func (n *noopSemStore) StoreBatch(_ context.Context, _ []pkg.MemoryEntry) error { return nil }
-func (n *noopSemStore) QueryText(_ context.Context, _ string, _ int) ([]pkg.MemoryEntry, error) {
+func (n *noopSemStore) QueryText(_ context.Context, _ string, _ int, _ string) ([]pkg.MemoryEntry, error) {
 	return nil, nil
 }
 
@@ -330,7 +330,7 @@ func TestDesignIntent_Gap3_NoopStoreDiscardsEverything(t *testing.T) {
 	noop := &noopSemStore{}
 
 	require.NoError(t, noop.Store(ctx, pkg.MemoryEntry{Content: "should be discarded", Importance: 1.0}))
-	results, err := noop.QueryText(ctx, "should be discarded", 10)
+	results, err := noop.QueryText(ctx, "should be discarded", 10, "")
 	require.NoError(t, err)
 	assert.Empty(t, results,
 		"noop store must discard all entries — this is the disabled-semantic-memory baseline")
@@ -353,7 +353,7 @@ func TestDesignIntent_Gap3_AgentStoresTurnInRealSemanticStore(t *testing.T) {
 		strings.Repeat("context for this query about semantic storage ", 5))
 
 	// The turn should be stored in the real semantic store.
-	results, err := h.semStore.QueryText(h.ctx, "semantic storage query", 5)
+	results, err := h.semStore.QueryText(h.ctx, "semantic storage query", 5, "")
 	require.NoError(t, err)
 	assert.NotEmpty(t, results,
 		"agent loop must store long turns in semantic store; if empty, the noop is active")

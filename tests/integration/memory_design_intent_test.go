@@ -169,7 +169,7 @@ func TestDesignIntent_SemanticReinforcement_RememberKeyword(t *testing.T) {
 
 	h.runTurn(t, "ch-1", "user-alice", "Please remember that my sister's name is Harriet.")
 
-	entries, err := h.semStore.QueryText(h.ctx, "sister name", 5)
+	entries, err := h.semStore.QueryText(h.ctx, "sister name", 5, "")
 	require.NoError(t, err)
 
 	require.NotEmpty(t, entries, "semantic store must contain an entry after 'remember' turn")
@@ -196,7 +196,7 @@ func TestDesignIntent_ShortTurns_NotStoredSemantically(t *testing.T) {
 	// "Thanks" — well under 50 tokens.
 	h.runTurn(t, "ch-1", "user-alice", "Thanks!")
 
-	entries, err := h.semStore.QueryText(h.ctx, "thanks", 5)
+	entries, err := h.semStore.QueryText(h.ctx, "thanks", 5, "")
 	require.NoError(t, err)
 	assert.Empty(t, entries, "short trivial turns must not be stored in semantic memory")
 }
@@ -231,7 +231,7 @@ func TestDesignIntent_LongTermRecall_BridgesEpisodicWindow(t *testing.T) {
 
 	// The planted fact should now be outside the episodic window (>20 turns ago).
 	// It must still be retrievable via semantic memory.
-	results, err := h.semStore.QueryText(h.ctx, "emergency contact", 5)
+	results, err := h.semStore.QueryText(h.ctx, "emergency contact", 5, "")
 	require.NoError(t, err)
 
 	require.NotEmpty(t, results, "important fact must survive past the episodic window via semantic memory")
@@ -550,7 +550,7 @@ func TestDesignIntent_ToolOnlyTurns_NotStoredSemantically(t *testing.T) {
 	// The tool-call round (empty content) must not be stored.
 	h.runTurn(t, "ch-tool", "user-alice", "What is the weather like?")
 
-	entries, err := h.semStore.QueryText(h.ctx, "weather sunny", 10)
+	entries, err := h.semStore.QueryText(h.ctx, "weather sunny", 10, "")
 	require.NoError(t, err)
 
 	// The final answer "It is sunny today" combined with the question is ~8 words

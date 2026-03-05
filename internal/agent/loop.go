@@ -249,6 +249,7 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 	ppFinalResp   := finalResponse
 	ppSessionID   := session.ID
 	ppChannelID   := session.ChannelID
+	ppUserID      := session.UserID
 	ppNow         := time.Now().UTC()
 
 	go func() {
@@ -269,7 +270,7 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 		}
 
 		// Step 8: Conditional semantic storage.
-		l.maybeSemanticallyStore(ppCtx, ppUserContent, ppLLMResponse, ppSessionID)
+		l.maybeSemanticallyStore(ppCtx, ppUserContent, ppLLMResponse, ppSessionID, ppUserID)
 
 		// Step 9a: Update relationship LastInteraction.
 		if rel, relErr := l.cfg.Memory.Identity().Relationship(); relErr == nil {
@@ -394,7 +395,7 @@ func (l *agentLoop) filterSafeToolCalls(calls []pkg.ToolCall, userContent, chann
 // assistantContent must be the actual LLM-generated text (not the graceful fallback) — an
 // empty string indicates a pure tool-call-only turn that produced no concluding text.
 // The reinforcement check happens BEFORE the length filter.
-func (l *agentLoop) maybeSemanticallyStore(ctx context.Context, userContent, assistantContent, sessionID string) {
+func (l *agentLoop) maybeSemanticallyStore(ctx context.Context, userContent, assistantContent, sessionID, userID string) {
 	combined := userContent + " " + assistantContent
 	lower := strings.ToLower(combined)
 
@@ -405,6 +406,7 @@ func (l *agentLoop) maybeSemanticallyStore(ctx context.Context, userContent, ass
 
 	if hasReinforcement {
 		entry := pkg.MemoryEntry{
+			UserID:     userID,
 			Content:    combined,
 			Source:     "conversation",
 			Timestamp:  time.Now().UTC(),
@@ -429,6 +431,7 @@ func (l *agentLoop) maybeSemanticallyStore(ctx context.Context, userContent, ass
 	}
 
 	entry := pkg.MemoryEntry{
+		UserID:     userID,
 		Content:    combined,
 		Source:     "conversation",
 		Timestamp:  time.Now().UTC(),

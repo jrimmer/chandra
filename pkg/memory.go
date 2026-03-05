@@ -15,6 +15,7 @@ type Episode struct {
 // MemoryEntry is a semantic memory item with embedding.
 type MemoryEntry struct {
 	ID         string
+	UserID     string    // user who generated this memory; "" = unscoped (legacy/admin)
 	Content    string
 	Embedding  []float32
 	Source     string    // "conversation" | "event" | "observation"

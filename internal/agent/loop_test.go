@@ -86,10 +86,10 @@ func (m *mockSemantic) StoreBatch(_ context.Context, entries []pkg.MemoryEntry) 
 	m.stored = append(m.stored, entries...)
 	return nil
 }
-func (m *mockSemantic) Query(_ context.Context, _ []float32, _ int) ([]pkg.MemoryEntry, error) {
+func (m *mockSemantic) Query(_ context.Context, _ []float32, _ int, _ string) ([]pkg.MemoryEntry, error) {
 	return m.entries, nil
 }
-func (m *mockSemantic) QueryText(_ context.Context, _ string, _ int) ([]pkg.MemoryEntry, error) {
+func (m *mockSemantic) QueryText(_ context.Context, _ string, _ int, _ string) ([]pkg.MemoryEntry, error) {
 	return m.entries, nil
 }
 
