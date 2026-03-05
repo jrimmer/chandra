@@ -209,15 +209,17 @@ func TestIntegration_FullAgentLoop(t *testing.T) {
 	exec := tools.NewExecutor(reg, db, 5*time.Second)
 
 	// 7. Assemble agent loop config.
+	ppDone := make(chan struct{})
 	cfg := agent.LoopConfig{
-		Provider:  mockProv,
-		Memory:    mem,
-		Budget:    budgetMgr,
-		Registry:  reg,
-		Executor:  exec,
-		ActionLog: aLog,
-		Channel:   &noopChannel{},
-		MaxRounds: 5,
+		Provider:        mockProv,
+		Memory:          mem,
+		Budget:          budgetMgr,
+		Registry:        reg,
+		Executor:        exec,
+		ActionLog:       aLog,
+		Channel:         &noopChannel{},
+		MaxRounds:       5,
+		PostProcessDone: func() { close(ppDone) },
 	}
 	loop := agent.NewLoop(cfg)
 
@@ -241,11 +243,12 @@ func TestIntegration_FullAgentLoop(t *testing.T) {
 		Content:        "Hello, Chandra!",
 	}
 
-	// 9. Run the agent loop.
+	// 9. Run the agent loop and wait for async post-processing.
 	resp, err := loop.Run(ctx, session, inbound)
 	if err != nil {
 		t.Fatalf("loop.Run: %v", err)
 	}
+	<-ppDone // ensure episodic/action-log writes complete before assertions
 
 	// 10. Assert response.
 	if resp != "Hello from Chandra!" {

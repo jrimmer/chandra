@@ -38,6 +38,7 @@ import (
 	"github.com/jrimmer/chandra/internal/memory/semantic"
 	"github.com/jrimmer/chandra/internal/provider"
 	"github.com/jrimmer/chandra/internal/provider/anthropic"
+	"github.com/jrimmer/chandra/internal/provider/embedcache"
 	"github.com/jrimmer/chandra/internal/provider/embeddings"
 	"github.com/jrimmer/chandra/internal/provider/openai"
 	"github.com/jrimmer/chandra/internal/scheduler"
@@ -213,7 +214,10 @@ func run(ctx context.Context, safeMode bool) error {
 			cfg.Embeddings.Model,
 			cfg.Embeddings.Dimensions,
 		)
-		semStore, semErr := semantic.NewStore(db, embProv)
+		// Wrap embedder with LRU cache: repeated/similar queries skip the Ollama round-trip.
+		// Default: 256 entries, 5-minute TTL. Saves ~100ms per cache hit.
+		cachedEmbProv := embedcache.New(embProv, embedcache.DefaultCapacity, embedcache.DefaultTTL)
+		semStore, semErr := semantic.NewStore(db, cachedEmbProv)
 		if semErr != nil {
 			slog.Warn("chandrad: semantic store init failed, using no-op", "err", semErr)
 		} else {

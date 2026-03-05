@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -57,6 +58,7 @@ type testHarness struct {
 	identStore  *identity.Store
 	intentStore intent.IntentStore
 	mockProv    *integrationMockProvider
+	ppWg        sync.WaitGroup // synchronises runTurn() callers with async post-processing
 }
 
 func newTestHarness(t *testing.T, responses []provider.CompletionResponse) *testHarness {
@@ -95,31 +97,34 @@ func newTestHarness(t *testing.T, responses []provider.CompletionResponse) *test
 	require.NoError(t, err)
 	exec := tools.NewExecutor(reg, db, 5*time.Second)
 
+	h := &testHarness{}
 	loop := agent.NewLoop(agent.LoopConfig{
-		Provider:  mockProv,
-		Memory:    mem,
-		Budget:    budgetMgr,
-		Registry:  reg,
-		Executor:  exec,
-		ActionLog: aLog,
-		Channel:   &noopChannel{},
-		MaxRounds: 5,
+		Provider:        mockProv,
+		Memory:          mem,
+		Budget:          budgetMgr,
+		Registry:        reg,
+		Executor:        exec,
+		ActionLog:       aLog,
+		Channel:         &noopChannel{},
+		MaxRounds:       5,
+		// PostProcessDone lets runTurn() wait for the async post-processing goroutine
+		// so tests can query memory immediately after a turn without data races.
+		PostProcessDone: func() { h.ppWg.Done() },
 	})
 
 	sessionMgr, err := agent.NewManager(db, 30*time.Minute)
 	require.NoError(t, err)
 
-	return &testHarness{
-		ctx:         ctx,
-		loop:        loop,
-		sessionMgr:  sessionMgr,
-		mem:         mem,
-		epStore:     epStore,
-		semStore:    semStore,
-		identStore:  identStore,
-		intentStore: intentStore,
-		mockProv:    mockProv,
-	}
+	h.ctx         = ctx
+	h.loop        = loop
+	h.sessionMgr  = sessionMgr
+	h.mem         = mem
+	h.epStore     = epStore
+	h.semStore    = semStore
+	h.identStore  = identStore
+	h.intentStore = intentStore
+	h.mockProv    = mockProv
+	return h
 }
 
 func (h *testHarness) runTurn(t *testing.T, channelID, userID, content string) string {
@@ -127,6 +132,8 @@ func (h *testHarness) runTurn(t *testing.T, channelID, userID, content string) s
 	convID := agent.ComputeConversationID(channelID, userID)
 	sess, err := h.sessionMgr.GetOrCreate(h.ctx, convID, channelID, userID)
 	require.NoError(t, err)
+	// Add to WaitGroup before Run() so we can wait for async post-processing.
+	h.ppWg.Add(1)
 	resp, err := h.loop.Run(h.ctx, sess, channels.InboundMessage{
 		ID:             fmt.Sprintf("msg-%d", time.Now().UnixNano()),
 		ConversationID: convID,
@@ -136,6 +143,9 @@ func (h *testHarness) runTurn(t *testing.T, channelID, userID, content string) s
 		Timestamp:      time.Now().UTC(),
 	})
 	require.NoError(t, err)
+	// Wait for the post-processing goroutine to complete before returning.
+	// This ensures episodic and semantic writes are visible to test assertions.
+	h.ppWg.Wait()
 	return resp
 }
 

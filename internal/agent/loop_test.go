@@ -239,6 +239,19 @@ func newTestMessage(content string) channels.InboundMessage {
 	}
 }
 
+
+// ppSync returns a (PostProcessDone callback, wait function) pair.
+// Use in tests that assert on state written by the async post-processing goroutine:
+//
+//	cb, wait := ppSync()
+//	cfg.PostProcessDone = cb
+//	loop.Run(...)
+//	wait() // blocks until goroutine finishes
+func ppSync() (func(), func()) {
+	done := make(chan struct{})
+	return func() { close(done) }, func() { <-done }
+}
+
 func newTestConfig(
 	p provider.Provider,
 	ep *mockEpisodic,
@@ -298,13 +311,16 @@ func TestAgentLoop_Run_BasicTurn(t *testing.T) {
 	bgt := &mockBudget{}
 	p := &mockProvider{responses: []provider.CompletionResponse{textResponse("Hello!")}}
 
+	cb, wait := ppSync()
 	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5)
+	cfg.PostProcessDone = cb
 	loop := agent.NewLoop(cfg)
 
 	resp, err := loop.Run(context.Background(), newTestSession(), newTestMessage("hi"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	wait()
 	if resp != "Hello!" {
 		t.Errorf("expected 'Hello!', got %q", resp)
 	}
@@ -384,7 +400,9 @@ func TestAgentLoop_Run_SemanticStorage_Reinforcement(t *testing.T) {
 	bgt := &mockBudget{}
 	p := &mockProvider{responses: []provider.CompletionResponse{textResponse("Got it.")}}
 
+	cb, wait := ppSync()
 	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5)
+	cfg.PostProcessDone = cb
 	loop := agent.NewLoop(cfg)
 
 	// Short message (< 50 tokens) but has reinforcement keyword.
@@ -392,6 +410,7 @@ func TestAgentLoop_Run_SemanticStorage_Reinforcement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	wait()
 	// Must be stored despite being short.
 	if len(sem.stored) == 0 {
 		t.Error("expected semantic storage for reinforcement turn, but Store was not called")
@@ -519,13 +538,16 @@ func TestAgentLoop_ActionLog_OutboundMessage(t *testing.T) {
 	bgt := &mockBudget{}
 	p := &mockProvider{responses: []provider.CompletionResponse{textResponse("Hello!")}}
 
+	cb, wait := ppSync()
 	cfg := newTestConfig(p, ep, sem, al, ex, bgt, nil, 5)
+	cfg.PostProcessDone = cb
 	loop := agent.NewLoop(cfg)
 
 	_, err := loop.Run(context.Background(), newTestSession(), newTestMessage("hello"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	wait()
 
 	found := false
 	for _, r := range al.recorded {
