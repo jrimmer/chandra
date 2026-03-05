@@ -132,7 +132,7 @@ func (d *Discord) Listen(ctx context.Context, msgs chan<- channels.InboundMessag
 		}
 		d.mu.Unlock()
 
-		var meta map[string]any
+		meta := map[string]any{}
 
 		// Prompt injection detection.
 		if checkSuspicious(m.Content) {
@@ -141,7 +141,31 @@ func (d *Discord) Listen(ctx context.Context, msgs chan<- channels.InboundMessag
 				"channel_id", m.ChannelID,
 				"user_id", m.Author.ID,
 			)
-			meta = map[string]any{"suspicious": "true"}
+			meta["suspicious"] = "true"
+		}
+
+		// Directedness signals for the routing layer.
+		// bot_mentioned: message explicitly @-mentions this bot.
+		botID := s.State.User.ID
+		for _, u := range m.Mentions {
+			if u.ID == botID {
+				meta["bot_mentioned"] = "true"
+				break
+			}
+		}
+		// is_reply: message is a reply to any prior message (not just bot messages).
+		// The routing layer uses this in combination with bot_mentioned.
+		if m.MessageReference != nil && m.MessageReference.MessageID != "" {
+			meta["is_reply"] = "true"
+			// is_reply_to_bot: referenced message is one we sent (in msgChanMap or known bot ID).
+			// We only have our own outbound message IDs if we track them; for now use the
+			// simpler signal: check if the referenced message author is the bot via cache.
+			// discordgo caches recent messages in session.State — try that first.
+			if refMsg, err := s.State.Message(m.ChannelID, m.MessageReference.MessageID); err == nil {
+				if refMsg.Author != nil && refMsg.Author.ID == botID {
+					meta["is_reply_to_bot"] = "true"
+				}
+			}
 		}
 
 		msg := channels.InboundMessage{

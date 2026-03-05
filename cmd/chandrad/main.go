@@ -707,6 +707,25 @@ func run(ctx context.Context, safeMode bool) error {
 						}
 					}
 
+					// Directedness gate: in guild channels, only respond when the bot is
+					// explicitly @mentioned or the message replies to a bot message.
+					// This prevents Chandra from responding to conversations between
+					// users that don't involve it.
+					// Skipped if require_mention = false in config (default: true).
+					requireMention := true
+					if cfg.Channels.Discord != nil && !cfg.Channels.Discord.RequireMention {
+						requireMention = false
+					}
+					if requireMention {
+						botMentioned := msg.Meta["bot_mentioned"] == "true"
+						replyToBot := msg.Meta["is_reply_to_bot"] == "true"
+						if !botMentioned && !replyToBot {
+							slog.Debug("chandrad: discord: message not directed at bot; skipping",
+								"user_id", msg.UserID, "channel_id", msg.ChannelID)
+							continue
+						}
+					}
+
 					sess, sessErr := sessionMgr.GetOrCreate(ctx, msg.ConversationID, msg.ChannelID, msg.UserID)
 					if sessErr != nil {
 						slog.Error("chandrad: discord: session error", "err", sessErr)
