@@ -91,7 +91,7 @@ func (t *scheduleReminderTool) Execute(ctx context.Context, call pkg.ToolCall) (
 	// Parse optional recurrence interval.
 	var recurrenceInterval time.Duration
 	if args.Interval != "" {
-		d, parseErr := parseInterval(args.Interval)
+		d, parseErr := ParseInterval(args.Interval)
 		if parseErr != nil {
 			return pkg.ToolResult{ID: call.ID, Content: fmt.Sprintf("error: invalid interval %q — use Go duration format like \"1h\", \"30m\", \"24h\", \"168h\" (7 days): %v", args.Interval, parseErr)}, nil
 		}
@@ -133,9 +133,9 @@ func (t *scheduleReminderTool) Execute(ctx context.Context, call pkg.ToolCall) (
 		Content: confirmMsg,
 	}, nil
 }
-// parseInterval parses a human-friendly duration string, extending Go's
+// ParseInterval parses a human-friendly duration string, extending Go's
 // standard time.ParseDuration with "d" (day) and "w" (week) suffixes.
-func parseInterval(s string) (time.Duration, error) {
+func ParseInterval(s string) (time.Duration, error) {
 	// Replace day/week suffixes before standard parsing.
 	repl := s
 	for len(repl) > 0 {

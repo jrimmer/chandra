@@ -20,6 +20,7 @@ type frontmatter struct {
 	DependsOn     []string          `yaml:"depends_on"`
 	RequiresShell bool              `yaml:"requires_shell"`
 	Generated     *GeneratedMeta    `yaml:"generated"`
+	Cron          *CronConfig       `yaml:"cron"`
 }
 
 // ParseSkillMD parses a SKILL.md file into a Skill.
@@ -55,6 +56,7 @@ func ParseSkillMD(data []byte, path string) (Skill, error) {
 		DependsOn:     meta.DependsOn,
 		RequiresShell: meta.RequiresShell,
 		Generated:     meta.Generated,
+		Cron:          meta.Cron,
 	}, nil
 }
 

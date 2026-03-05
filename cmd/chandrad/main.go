@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"path/filepath"
 	"syscall"
@@ -291,6 +292,20 @@ func run(ctx context.Context, safeMode bool) error {
 	// Step 5b: Initialize skill registry.
 	// -------------------------------------------------------------------
 	skillReg := skills.NewRegistry()
+
+	// Wire the CronSyncer so skills with cron frontmatter auto-register intents.
+	// defaultCronChannelID is the first configured Discord channel (or empty).
+	defaultCronChannelID := ""
+	if cfg.Channels.Discord != nil && len(cfg.Channels.Discord.ChannelIDs) > 0 {
+		defaultCronChannelID = cfg.Channels.Discord.ChannelIDs[0]
+	}
+	defaultCronUserID := "" // admin user; intentionally empty (broadcast to channel)
+	skillReg.SetCronSyncer(&skillCronSyncer{
+		store:     inStore,
+		channel:   defaultCronChannelID,
+		userID:    defaultCronUserID,
+	})
+
 	expandedSkillDir := expandPath(cfg.Skills.Path)
 	if err := skillReg.Load(ctx, expandedSkillDir, registeredToolNames(registry)); err != nil {
 		slog.Warn("chandrad: skills load failed", "err", err)
@@ -492,7 +507,9 @@ func run(ctx context.Context, safeMode bool) error {
 						slog.Error("scheduled turn failed", "intent", turn.IntentID, "err", schedErr)
 					} else {
 						// Deliver the response to the originating Discord channel.
-						if resp != "" && turn.ChannelID != "" && discordDC != nil {
+						// "QUIET" response means the agent checked but found nothing to say.
+						isQuiet := resp == "QUIET" || strings.HasPrefix(resp, "QUIET\n")
+						if resp != "" && !isQuiet && turn.ChannelID != "" && discordDC != nil {
 							_ = discordDC.Send(ctx, channels.OutboundMessage{
 								ChannelID: turn.ChannelID,
 								Content:   resp,
@@ -1499,6 +1516,80 @@ func (n *noopSemanticStore) Query(_ context.Context, _ []float32, _ int, _ strin
 }
 func (n *noopSemanticStore) QueryText(_ context.Context, _ string, _ int, _ string) ([]pkg.MemoryEntry, error) {
 	return nil, nil
+}
+
+// skillCronSyncer implements skills.CronSyncer.
+// It upserts/removes recurring intents for skills with cron frontmatter.
+// Intents are identified by Condition = "skill_cron:<skillName>".
+type skillCronSyncer struct {
+	store   intent.IntentStore
+	channel string // default delivery channel
+	userID  string // default delivery user (empty = channel-only)
+}
+
+func (s *skillCronSyncer) UpsertSkillCron(ctx context.Context, skillName, interval, prompt, channel string) error {
+	condition := "skill_cron:" + skillName
+
+	// Check if an active intent already exists for this skill.
+	active, err := s.store.Active(ctx)
+	if err != nil {
+		return fmt.Errorf("skill cron upsert: list active: %w", err)
+	}
+	for _, in := range active {
+		if in.Condition == condition {
+			// Already exists; nothing to do (interval/prompt changes require manual reset).
+			slog.Debug("skills: cron intent already active", "skill", skillName, "intent_id", in.ID)
+			return nil
+		}
+	}
+
+	// Parse the interval.
+	d, err := scheduletool.ParseInterval(interval)
+	if err != nil {
+		return fmt.Errorf("skill cron upsert: parse interval %q: %w", interval, err)
+	}
+	if d < time.Minute {
+		return fmt.Errorf("skill cron upsert: interval must be >= 1 minute, got %v", d)
+	}
+
+	// Resolve delivery channel.
+	deliveryChannel := s.channel
+	if channel != "" && channel != "default" {
+		deliveryChannel = channel
+	}
+
+	in := intent.Intent{
+		Description:        fmt.Sprintf("Skill cron: %s", skillName),
+		Condition:          condition,
+		Action:             prompt,
+		ChannelID:          deliveryChannel,
+		UserID:             s.userID,
+		NextCheck:          time.Now().Add(d), // first fire after one interval
+		RecurrenceInterval: d,
+	}
+	if err := s.store.Create(ctx, in); err != nil {
+		return fmt.Errorf("skill cron upsert: create intent: %w", err)
+	}
+	slog.Info("skills: cron intent created", "skill", skillName, "interval", interval)
+	return nil
+}
+
+func (s *skillCronSyncer) RemoveSkillCron(ctx context.Context, skillName string) error {
+	condition := "skill_cron:" + skillName
+	active, err := s.store.Active(ctx)
+	if err != nil {
+		return fmt.Errorf("skill cron remove: list active: %w", err)
+	}
+	for _, in := range active {
+		if in.Condition == condition {
+			if err := s.store.Complete(ctx, in.ID); err != nil {
+				return fmt.Errorf("skill cron remove: complete intent: %w", err)
+			}
+			slog.Info("skills: cron intent removed", "skill", skillName)
+			return nil
+		}
+	}
+	return nil // not found is fine
 }
 
 // expandPath expands ~ to the user's home directory.

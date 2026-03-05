@@ -18,6 +18,16 @@ type GenerationLock struct {
 }
 
 // Registry loads, stores, and matches skills.
+// CronSyncer is implemented by the daemon to manage scheduler intents
+// for skills that declare a cron block in their frontmatter.
+type CronSyncer interface {
+	// UpsertSkillCron ensures a recurring intent exists for the skill.
+	// Creates one if absent, updates interval/prompt if changed.
+	UpsertSkillCron(ctx context.Context, skillName, interval, prompt, channel string) error
+	// RemoveSkillCron completes the recurring intent for the skill, if any.
+	RemoveSkillCron(ctx context.Context, skillName string) error
+}
+
 type Registry struct {
 	mu              sync.RWMutex
 	skills          map[string]Skill
@@ -26,6 +36,7 @@ type Registry struct {
 	registeredTools map[string]bool
 	genLocks        map[string]*GenerationLock
 	maxPendingReview int
+	cronSyncer      CronSyncer // optional; wired by daemon at startup
 }
 
 // NewRegistry creates an empty skill registry.
@@ -34,6 +45,14 @@ func NewRegistry() *Registry {
 		skills:   make(map[string]Skill),
 		genLocks: make(map[string]*GenerationLock),
 	}
+}
+
+// SetCronSyncer wires the daemon's CronSyncer implementation into the registry.
+// Call this before Load() to enable skill cron support.
+func (r *Registry) SetCronSyncer(cs CronSyncer) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cronSyncer = cs
 }
 
 // Load scans skillsDir for SKILL.md files, parses them, validates requirements,
@@ -100,7 +119,31 @@ func (r *Registry) Load(ctx context.Context, skillsDir string, registeredTools m
 		slog.Info("skills: loaded", "skill", skill.Name, "triggers", skill.Triggers)
 	}
 
+	// Sync cron intents for skills that declare a cron block.
+	if r.cronSyncer != nil {
+		r.syncCronsLocked(ctx)
+	}
+
 	return nil
+}
+
+// syncCronsLocked syncs scheduler intents for all loaded skills.
+// Must be called with r.mu held (Lock, not RLock).
+func (r *Registry) syncCronsLocked(ctx context.Context) {
+	loaded := make(map[string]bool)
+	for name, skill := range r.skills {
+		loaded[name] = true
+		if skill.Cron == nil {
+			continue
+		}
+		ch := skill.Cron.Channel
+		if ch == "" {
+			ch = "default"
+		}
+		if err := r.cronSyncer.UpsertSkillCron(ctx, name, skill.Cron.Interval, skill.Cron.Prompt, ch); err != nil {
+			slog.Warn("skills: failed to upsert cron intent", "skill", name, "err", err)
+		}
+	}
 }
 
 // Reload rescans the skills directory using the same config as the last Load.
