@@ -1114,18 +1114,25 @@ func registerHandlers(
 	})
 
 	// daemon.restart — gracefully replaces the current process with a fresh
-	// instance of the same binary. Used by the agent to self-restart after
-	// installing a new binary. The response is sent before exec.
+	// instance of the same binary. Saves a .bak copy before re-execing so a
+	// rollback is always possible. Use chandrad-update for code deployments
+	// (it provides health-check + automatic rollback); this endpoint is for
+	// simple config-reload restarts.
 	srv.Handle("daemon.restart", func(ctx context.Context, _ json.RawMessage) (any, error) {
+		binary := os.Args[0]
 		go func() {
 			// Brief delay to allow the response to be flushed to the client.
 			time.Sleep(300 * time.Millisecond)
-			slog.Info("chandrad: daemon.restart: re-execing")
-			if err := syscall.Exec(os.Args[0], os.Args, os.Environ()); err != nil {
+			// Best-effort backup before re-exec.
+			if data, err := os.ReadFile(binary); err == nil {
+				_ = os.WriteFile(binary+".bak", data, 0755)
+			}
+			slog.Info("chandrad: daemon.restart: re-execing", "binary", binary)
+			if err := syscall.Exec(binary, os.Args, os.Environ()); err != nil {
 				slog.Error("chandrad: daemon.restart: exec failed", "err", err)
 			}
 		}()
-		return map[string]any{"status": "restarting", "binary": os.Args[0]}, nil
+		return map[string]any{"status": "restarting", "binary": binary, "backup": binary + ".bak"}, nil
 	})
 
 	// daemon.stop — triggers graceful shutdown via context cancel.
