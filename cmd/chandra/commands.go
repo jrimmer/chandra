@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jrimmer/chandra/internal/access"
+	"github.com/jrimmer/chandra/internal/memory/identity"
 	"github.com/jrimmer/chandra/internal/api"
 	"github.com/jrimmer/chandra/internal/channels/discord"
 	"github.com/jrimmer/chandra/internal/config"
@@ -1149,6 +1150,10 @@ func init() {
 	initCmd.Flags().StringVar(&initConfigPath, "config", "", "path to write config (default: ~/.config/chandra/config.toml)")
 	rootCmd.AddCommand(initCmd)
 
+	// Relationship subcommands.
+	relationshipCmd.AddCommand(relationshipGetCmd, relationshipSetTrustCmd, relationshipSetStyleCmd)
+	rootCmd.AddCommand(relationshipCmd)
+
 	// Config subcommands.
 	configCmd.AddCommand(configShowCmd, configValidateCmd, configSchemaCmd)
 	rootCmd.AddCommand(configCmd)
@@ -1184,6 +1189,109 @@ func openDB() *sql.DB {
 	}
 	return st.DB()
 }
+
+// ---------------------------------------------------------------------------
+// relationship — view and set relationship state (trust level, style)
+// ---------------------------------------------------------------------------
+
+var relationshipCmd = &cobra.Command{
+	Use:   "relationship",
+	Short: "View or update the agent-user relationship state",
+}
+
+var relationshipGetCmd = &cobra.Command{
+	Use:   "get",
+	Short: "Show current relationship state (trust level, style, active context)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		db := openDB()
+		st := identity.NewStore(db, "default")
+		ensureUserProfile(st)
+		rel, err := st.Relationship()
+		if err != nil {
+			// No row yet — show defaults.
+			rel = identity.RelationshipState{TrustLevel: 3, CommunicationStyle: "concise"}
+		}
+		agent, _ := st.Agent()
+		user, _ := st.User()
+		fmt.Printf("Agent:  %s\n", agent.Name)
+		fmt.Printf("User:   %s\n", user.Name)
+		fmt.Printf("Trust:  %d/5\n", rel.TrustLevel)
+		fmt.Printf("Style:  %s\n", rel.CommunicationStyle)
+		if len(rel.OngoingContext) == 0 {
+			fmt.Println("Active: (none)")
+		} else {
+			for i, item := range rel.OngoingContext {
+				if i == 0 {
+					fmt.Printf("Active: %s\n", item)
+				} else {
+					fmt.Printf("        %s\n", item)
+				}
+			}
+		}
+		fmt.Printf("Last:   %s\n", rel.LastInteraction.Format("2006-01-02 15:04 UTC"))
+		return nil
+	},
+}
+
+var relationshipSetTrustCmd = &cobra.Command{
+	Use:   "set-trust <1-5>",
+	Short: "Set trust level (1=new, 3=established, 5=deeply trusted)",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		level := 0
+		if _, err := fmt.Sscanf(args[0], "%d", &level); err != nil || level < 1 || level > 5 {
+			return fmt.Errorf("trust level must be an integer between 1 and 5")
+		}
+		db := openDB()
+		st := identity.NewStore(db, "default")
+		ensureUserProfile(st)
+		rel, err := st.Relationship()
+		if err != nil {
+			rel = identity.RelationshipState{CommunicationStyle: "concise"}
+		}
+		rel.TrustLevel = level
+		if err := st.UpdateRelationship(cmd.Context(), rel); err != nil {
+			return fmt.Errorf("update relationship: %w", err)
+		}
+		fmt.Printf("trust level set to %d/5\n", level)
+		return nil
+	},
+}
+
+var relationshipSetStyleCmd = &cobra.Command{
+	Use:   "set-style <concise|detailed|casual>",
+	Short: "Set the preferred communication style",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		style := args[0]
+		if style != "concise" && style != "detailed" && style != "casual" {
+			return fmt.Errorf("style must be one of: concise, detailed, casual")
+		}
+		db := openDB()
+		st := identity.NewStore(db, "default")
+		ensureUserProfile(st)
+		rel, err := st.Relationship()
+		if err != nil {
+			rel = identity.RelationshipState{TrustLevel: 3}
+		}
+		rel.CommunicationStyle = style
+		if err := st.UpdateRelationship(cmd.Context(), rel); err != nil {
+			return fmt.Errorf("update relationship: %w", err)
+		}
+		fmt.Printf("communication style set to %q\n", style)
+		return nil
+	},
+}
+
+
+// ensureUserProfile creates a minimal user_profile "default" row if absent.
+// Required as FK parent for relationship_state.
+func ensureUserProfile(st *identity.Store) {
+	if _, err := st.User(); err != nil {
+		_ = st.SetUser(context.Background(), identity.UserProfile{ID: "default", Name: "User"})
+	}
+}
+
 
 // saveConfig serialises cfg back to the TOML config file at path.
 // Used by access add/remove --role to update allowed_roles in place.

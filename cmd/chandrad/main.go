@@ -43,6 +43,7 @@ import (
 	"github.com/jrimmer/chandra/internal/tools/confirm"
 	"github.com/jrimmer/chandra/pkg"
 	"github.com/jrimmer/chandra/store"
+	ctxtools "github.com/jrimmer/chandra/skills/context"
 	webskill "github.com/jrimmer/chandra/skills/web"
 )
 
@@ -181,6 +182,16 @@ func run(ctx context.Context, safeMode bool) error {
 		}
 	}
 
+	// Seed user_profile "default" if absent — required as FK parent for relationship_state.
+	if _, userErr := idStore.User(); userErr != nil {
+		seedUser := identity.UserProfile{ID: "default", Name: "User"}
+		if seedErr := idStore.SetUser(context.Background(), seedUser); seedErr != nil {
+			slog.Warn("chandrad: failed to seed user profile", "err", seedErr)
+		} else {
+			slog.Info("chandrad: seeded user profile")
+		}
+	}
+
 	var semStoreIface semantic.SemanticStore = &noopSemanticStore{}
 	if cfg.Embeddings.BaseURL != "" && cfg.Embeddings.Model != "" {
 		embProv := embeddings.NewProvider(
@@ -194,6 +205,10 @@ func run(ctx context.Context, safeMode bool) error {
 			slog.Warn("chandrad: semantic store init failed, using no-op", "err", semErr)
 		} else {
 			semStoreIface = semStore
+			slog.Info("chandrad: semantic memory enabled",
+				"model", cfg.Embeddings.Model,
+				"dimensions", cfg.Embeddings.Dimensions,
+			)
 		}
 	}
 
@@ -211,6 +226,12 @@ func run(ctx context.Context, safeMode bool) error {
 
 	if err := registry.Register(webskill.NewWebSearch()); err != nil {
 		slog.Warn("chandrad: register web_search failed", "err", err)
+	}
+	if err := registry.Register(ctxtools.NewNoteContext(idStore)); err != nil {
+		slog.Warn("chandrad: register note_context failed", "err", err)
+	}
+	if err := registry.Register(ctxtools.NewForgetContext(idStore)); err != nil {
+		slog.Warn("chandrad: register forget_context failed", "err", err)
 	}
 
 	// read_skill is registered after skillReg is initialized (Step 5b below).

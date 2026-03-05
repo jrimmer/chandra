@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -331,6 +332,9 @@ func Run(ctx context.Context, opts Options) error {
 	// --- Stage 2: Channels ---
 	var discordToken, discordChannelID, accessPolicy string
 	var discordRoleIDs []string
+	// Semantic memory stage outputs.
+	var embBaseURL, embModel string
+	var embDimensions int
 	if !cp.ChannelsDone {
 		if err := runChannelStage(ctx, &discordToken, &discordChannelID, &accessPolicy, &discordRoleIDs); err != nil {
 			return err
@@ -401,6 +405,16 @@ func Run(ctx context.Context, opts Options) error {
 		agentDescription = cp.AgentDescription
 	}
 
+	// --- Stage 3b: Semantic memory (optional Ollama) ---
+	if !cp.ConfigWritten {
+		var semErr error
+		embBaseURL, embModel, embDimensions, semErr = runSemanticStage(ctx)
+		if semErr != nil {
+			fmt.Printf("\nWarning: semantic memory setup: %v — continuing without it.\n", semErr)
+			embBaseURL, embModel = "", ""
+		}
+	}
+
 	// --- Stage 4: Write config + initialise database ---
 	if !cp.ConfigWritten {
 		fmt.Println()
@@ -448,6 +462,21 @@ func Run(ctx context.Context, opts Options) error {
 			// that the archive already completed and clears the flag.
 			if err := SaveCheckpoint(cpPath, cp); err != nil {
 				slog.Warn("init: failed to clear FreshStart in checkpoint after archive (non-fatal)", "err", err)
+			}
+		}
+
+		// Write embeddings section if semantic memory was enabled.
+		if embBaseURL != "" {
+			content, readErr := os.ReadFile(opts.ConfigPath)
+			if readErr == nil {
+				embSection := fmt.Sprintf(`
+[embeddings]
+base_url   = %q
+api_key    = ""
+model      = %q
+dimensions = %d
+`, embBaseURL, embModel, embDimensions)
+				_ = os.WriteFile(opts.ConfigPath, append(content, []byte(embSection)...), 0600)
 			}
 		}
 
@@ -925,7 +954,7 @@ func providerBaseURL(t string) string {
 	case "openai":
 		return "https://api.openai.com/v1"
 	case "anthropic":
-		return "https://api.anthropic.com/v1"
+		return "https://api.anthropic.com"
 	case "openrouter":
 		return "https://openrouter.ai/api/v1"
 	case "ollama":
@@ -950,6 +979,98 @@ func providerEmbeddingModel(t string) string {
 		return "text-embedding-3-small"
 	}
 }
+
+// ---------------------------------------------------------------------------
+// runSemanticStage prompts the user about long-term semantic memory via Ollama.
+// Returns the embeddings base URL, model name, and dimensions to write to config.
+// Returns empty strings when the user declines or the install fails.
+// ---------------------------------------------------------------------------
+
+const (
+	ollamaEmbedModel      = "nomic-embed-text"
+	ollamaEmbedDimensions = 768
+	ollamaBaseURL         = "http://localhost:11434/v1"
+)
+
+func runSemanticStage(ctx context.Context) (baseURL, model string, dimensions int, err error) {
+	fmt.Println()
+
+	var enable bool
+	form := huh.NewForm(huh.NewGroup(
+		huh.NewConfirm().
+			Title("Enable long-term semantic memory?").
+			Description("Allows Chandra to recall facts from past conversations by relevance, not just recency.\nUses Ollama (local AI, no cloud API) with the nomic-embed-text model (~274 MB download).\nYou can skip this and add it later with: chandra config set-embeddings").
+			Value(&enable),
+	))
+	if runErr := form.Run(); runErr != nil {
+		return "", "", 0, nil // treat form error as user cancel
+	}
+	if !enable {
+		fmt.Println("Semantic memory skipped. Enable later with: chandra config set-embeddings")
+		return "", "", 0, nil
+	}
+
+	// Check if Ollama is already installed.
+	ollamaInstalled := false
+	if path, lookErr := exec.LookPath("ollama"); lookErr == nil {
+		_ = path
+		ollamaInstalled = true
+	}
+
+	if !ollamaInstalled {
+		fmt.Println("\nInstalling Ollama...")
+		fmt.Println("  This runs the official Ollama install script (https://ollama.com/install.sh)")
+		fmt.Println("  Sudo access is required.")
+
+		installCmd := exec.CommandContext(ctx, "bash", "-c", "curl -fsSL https://ollama.com/install.sh | sh")
+		installCmd.Stdout = os.Stdout
+		installCmd.Stderr = os.Stderr
+		if installErr := installCmd.Run(); installErr != nil {
+			return "", "", 0, fmt.Errorf("Ollama install failed: %w", installErr)
+		}
+		fmt.Println("Ollama installed.")
+	} else {
+		fmt.Println("Ollama already installed.")
+	}
+
+	// Ensure Ollama service is running.
+	startCmd := exec.CommandContext(ctx, "bash", "-c", "systemctl is-active ollama >/dev/null 2>&1 || (ollama serve >/dev/null 2>&1 &)")
+	_ = startCmd.Run()
+
+	// Check if the model is already pulled.
+	modelPresent := false
+	listOut, listErr := exec.CommandContext(ctx, "ollama", "list").Output()
+	if listErr == nil && strings.Contains(string(listOut), ollamaEmbedModel) {
+		modelPresent = true
+	}
+
+	if !modelPresent {
+		fmt.Printf("\nDownloading %s model (~274 MB)...\n", ollamaEmbedModel)
+		pullCmd := exec.CommandContext(ctx, "ollama", "pull", ollamaEmbedModel)
+		pullCmd.Stdout = os.Stdout
+		pullCmd.Stderr = os.Stderr
+		if pullErr := pullCmd.Run(); pullErr != nil {
+			return "", "", 0, fmt.Errorf("model pull failed: %w", pullErr)
+		}
+	} else {
+		fmt.Printf("%s already downloaded.\n", ollamaEmbedModel)
+	}
+
+	// Quick smoke test: request one embedding to confirm the endpoint is live.
+	testCmd := exec.CommandContext(ctx, "bash", "-c",
+		`curl -s -X POST http://localhost:11434/v1/embeddings `+
+			`-H "Content-Type: application/json" `+
+			`-d '{"model":"nomic-embed-text","input":["test"]}' `+
+			`| grep -q '"embedding"'`,
+	)
+	if testErr := testCmd.Run(); testErr != nil {
+		return "", "", 0, fmt.Errorf("Ollama endpoint test failed — is the service running? (%w)", testErr)
+	}
+
+	fmt.Println("Semantic memory enabled via Ollama (nomic-embed-text).")
+	return ollamaBaseURL, ollamaEmbedModel, ollamaEmbedDimensions, nil
+}
+
 
 // persistChannelVerified records a successful Hello World loop in channel_verifications.
 // Always called on loop success — ChannelVerifiedCheck reads this table.
