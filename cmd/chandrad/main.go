@@ -254,8 +254,24 @@ func run(ctx context.Context, safeMode bool) error {
 	if err := registry.Register(scheduletool.NewScheduleReminderTool(inStore)); err != nil {
 		slog.Warn("chandrad: register schedule_reminder failed", "err", err)
 	}
-	if err := registry.Register(scheduletool.NewListRemindersTool(inStore)); err != nil {
-		slog.Warn("chandrad: register list_reminders failed", "err", err)
+	// skillReg is declared here and assigned in Step 5b.
+	// The closure captures the variable; by the time any tool call executes,
+	// skillReg will have been fully initialized.
+	var skillReg *skills.Registry
+
+	// Wire list_intents with a skill category lookup from the registry.
+	skillCategoryLookup := scheduletool.SkillCategoryLookup(func(skillName string) string {
+		if skillReg == nil {
+			return ""
+		}
+		sk, ok := skillReg.Get(skillName)
+		if !ok {
+			return ""
+		}
+		return sk.Category
+	})
+	if err := registry.Register(scheduletool.NewListIntentsTool(inStore, skillCategoryLookup)); err != nil {
+		slog.Warn("chandrad: register list_intents failed", "err", err)
 	}
 	if err := registry.Register(scheduletool.NewGetCurrentTimeTool()); err != nil {
 		slog.Warn("chandrad: register get_current_time failed", "err", err)
@@ -294,7 +310,7 @@ func run(ctx context.Context, safeMode bool) error {
 	// -------------------------------------------------------------------
 	// Step 5b: Initialize skill registry.
 	// -------------------------------------------------------------------
-	skillReg := skills.NewRegistry()
+	skillReg = skills.NewRegistry()
 
 	// Wire the CronSyncer so skills with cron frontmatter auto-register intents.
 	// defaultCronChannelID is the first configured Discord channel (or empty).

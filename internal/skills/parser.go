@@ -21,6 +21,7 @@ type frontmatter struct {
 	RequiresShell bool              `yaml:"requires_shell"`
 	Generated     *GeneratedMeta    `yaml:"generated"`
 	Cron          *CronConfig       `yaml:"cron"`
+	Category      string            `yaml:"category"`
 }
 
 // ParseSkillMD parses a SKILL.md file into a Skill.
@@ -57,6 +58,7 @@ func ParseSkillMD(data []byte, path string) (Skill, error) {
 		RequiresShell: meta.RequiresShell,
 		Generated:     meta.Generated,
 		Cron:          meta.Cron,
+		Category:      meta.Category,
 	}, nil
 }
 

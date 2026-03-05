@@ -51,6 +51,7 @@ type Skill struct {
 	RequiresShell bool           // Whether this skill needs shell access
 	Generated     *GeneratedMeta // Non-nil for auto-generated skills
 	Cron          *CronConfig    // Non-nil if skill declares a recurring cron job
+	Category      string         // Optional skill category, e.g. "proactive", "utility", "monitoring"
 }
 
 // SkillRequirements declares what a skill needs to function.
