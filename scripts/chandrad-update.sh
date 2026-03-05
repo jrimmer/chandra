@@ -41,6 +41,22 @@ log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" | tee -a "$LOG_FILE"; }
 
 health_ok() { "$HEALTH_CMD" health 2>/dev/null | grep -qi "ok\|healthy\|running"; }
 
+# Post a message to Discord via the bot API.
+# Requires CHANDRA_DISCORD_BOT_TOKEN and CHANDRA_DISCORD_CHANNEL_ID to be set.
+discord_post() {
+    local msg="$1"
+    [[ -z "${CHANDRA_DISCORD_BOT_TOKEN:-}" ]] && return
+    [[ -z "${CHANDRA_DISCORD_CHANNEL_ID:-}" ]] && return
+    local payload
+    payload=$(python3 -c "import json,sys; print(json.dumps({'content': sys.argv[1]}))" "$msg" 2>/dev/null || true)
+    [[ -z "$payload" ]] && return
+    curl -sf -X POST \
+        "https://discord.com/api/v10/channels/${CHANDRA_DISCORD_CHANNEL_ID}/messages" \
+        -H "Authorization: Bot ${CHANDRA_DISCORD_BOT_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "$payload" > /dev/null 2>&1 || true
+}
+
 atomic_install() {
     local src="$1" dst="$2"
     local tmp="${dst}.tmp.$$"
@@ -154,6 +170,7 @@ rollback_to_latest_archive() {
 
     if health_ok; then
         log "✅ Rollback successful — previous version is running."
+        discord_post "⚠️ **Chandra update rolled back** — \`${CHANDRA_NEW_COMMIT:-unknown}\` failed health check. Reverted to previous version."
     else
         log "🚨 CRITICAL: rollback daemon failed health check."
         log "   Archive directory: $VERSION_DIR"
@@ -216,6 +233,18 @@ if [[ "$HEALTHY" == "true" ]]; then
     log "✅ Update complete — new version running."
     log "══════════════════════════════════════"
     echo "update_ok:$(date -u +%Y-%m-%dT%H:%M:%SZ):$NEW_BIN" > "$RESULT_FILE"
+
+    # Post Discord changelog notification.
+    OLD="${CHANDRA_OLD_COMMIT:-unknown}"
+    NEW="${CHANDRA_NEW_COMMIT:-unknown}"
+    CHANGES="${CHANDRA_CHANGELOG:-}"
+    if [[ -n "$CHANGES" ]]; then
+        CHANGES_FMT=$(echo "$CHANGES" | awk '{print "• "$0}' | head -15 | tr '\n' '|' | sed 's/|/\n/g')
+        MSG="🚀 **Chandra updated** \`${OLD}\` → \`${NEW}\`\n**What changed:**\n${CHANGES_FMT}"
+    else
+        MSG="🚀 **Chandra updated** \`${OLD}\` → \`${NEW}\`"
+    fi
+    discord_post "$MSG"
     exit 0
 fi
 

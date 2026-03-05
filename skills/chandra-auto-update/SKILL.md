@@ -1,125 +1,92 @@
 ---
 name: chandra-auto-update
-description: Automatically checks for and applies Chandra updates from the git repository on a schedule. Respects version pins — if a pin is set, reports it and skips. Runs tests before deploying and rolls back automatically if health check fails.
+description: Autonomously polls for new Chandra releases on a schedule, builds, tests, and deploys them. Posts a changelog to Discord on success or failure. Respects a version pin file. No human approval required — runs silently and reports results directly to the channel.
 category: maintenance
 cron:
   interval: 24h
   prompt: |
-    Check if there's a new version of Chandra to deploy.
+    Run the Chandra auto-update check. This is a fully autonomous operation.
 
-    ## Pin check
-    First check if a version is pinned:
-    ```
-    exec: cat ~/.config/chandra/update.pin 2>/dev/null || echo "(no pin)"
-    ```
-    If the pin file exists and is non-empty, read its contents. Report the pinned version
-    and skip the update. Do not proceed past this point if pinned.
+    Execute the autoupdate script with Discord credentials:
 
-    ## Current version check
     ```
-    exec: cd ~/chandra && git rev-parse --short HEAD
-    exec: cd ~/chandra && git log --oneline -1
+    exec(
+      command="CHANDRA_DISCORD_BOT_TOKEN=$(grep bot_token ~/.config/chandra/config.toml | head -1 | sed 's/.*= \"//;s/\"//') CHANDRA_DISCORD_CHANNEL_ID=1478847178058367088 nohup /usr/local/bin/chandrad-autoupdate > /tmp/chandrad-autoupdate.log 2>&1 & disown; echo started",
+      confirmed=true
+    )
     ```
 
-    ## Fetch latest from remote
-    ```
-    exec: cd ~/chandra && git fetch origin main --quiet 2>&1
-    ```
-
-    ## Compare local vs remote
-    ```
-    exec: cd ~/chandra && git rev-list HEAD..origin/main --count
-    ```
-    If count is 0: report "Already up to date — no update needed." and stop.
-
-    ## New commits available — pull, build, test, deploy
-    Log what's new:
-    ```
-    exec: cd ~/chandra && git log HEAD..origin/main --oneline
-    ```
-
-    Pull:
-    ```
-    exec: cd ~/chandra && git pull origin main
-    ```
-
-    Build (confirmed — this is an expected automated operation):
-    ```
-    exec: cd ~/chandra && make build
-    ```
-
-    Test (hard gate — abort if this fails):
-    ```
-    exec: cd ~/chandra && make test
-    ```
-    If tests fail: report the failure, do NOT proceed with deployment.
-
-    Deploy using the safe update script:
-    ```
-    exec: nohup /usr/local/bin/chandrad-update ~/chandra/bin/chandrad > /tmp/chandrad-update.log 2>&1 & disown; echo "update started"
-    ```
-
-    Report: "Auto-update started — I'll report back once the health check completes
-    (check /tmp/chandrad-update-result and /tmp/chandrad-update.log for outcome)."
-
-    After restart, on next interaction read the result:
-    ```
-    exec: cat /tmp/chandrad-update-result 2>/dev/null || echo "(result not yet written)"
-    ```
+    Do not ask for approval. Do not send a message to the channel.
+    The update script handles everything including the Discord notification.
+    Respond with exactly: QUIET
 requires:
-  bins: [git, make]
+  bins: [git, make, curl, python3]
 ---
+
+## How it works
+
+The `chandra-auto-update` skill runs on a 24-hour schedule. When it fires:
+
+1. **Pin check** — if `~/.config/chandra/update.pin` exists and is non-empty, skip entirely
+2. **Fetch** — `git fetch origin main`
+3. **Count new commits** — if 0, exit silently
+4. **Changelog** — capture `git log HEAD..origin/main --oneline`
+5. **Pull** — `git pull origin main`
+6. **Build** — `make build` (abort + notify Discord if fails)
+7. **Test** — `make test` hard gate (abort + revert pull + notify Discord if fails)
+8. **Deploy** — `chandrad-update` handles: archive current → install new → kill old → start new → 30s health poll → rollback if unhealthy
+9. **Notify** — Discord message posted by `chandrad-update` on success or rollback
+
+## Discord notification format
+
+On success:
+```
+🚀 Chandra updated `abc1234` → `def5678`
+What changed:
+• feat(something): description
+• fix(other): description
+```
+
+On rollback:
+```
+⚠️ Chandra update rolled back — `def5678` failed health check. Reverted to previous version.
+```
+
+On build/test failure:
+```
+⚠️ Auto-update failed — build error on `def5678`. Check /tmp/chandrad-autoupdate.log.
+```
 
 ## Pin management
 
-To **pin** to the current version (preventing auto-update):
+**Pin current version** (stop auto-updates):
 ```bash
-exec: git -C ~/chandra rev-parse --short HEAD > ~/.config/chandra/update.pin
-exec: cat ~/.config/chandra/update.pin
+exec: git -C ~/chandra rev-parse --short HEAD > ~/.config/chandra/update.pin && echo "pinned"
 ```
 
-To **pin to a specific commit or tag**:
-```bash
-exec: echo "abc1234" > ~/.config/chandra/update.pin
-```
-
-To **unpin** (re-enable auto-update):
+**Unpin** (re-enable auto-updates):
 ```bash
 exec: rm -f ~/.config/chandra/update.pin && echo "unpinned"
 ```
 
-To check pin status:
+**Check pin status**:
 ```bash
 exec: cat ~/.config/chandra/update.pin 2>/dev/null && echo "(pinned)" || echo "(no pin — auto-update enabled)"
 ```
 
-## Rollback
+## Manual trigger
 
-To list available versions:
+To run the auto-update check immediately:
 ```bash
-exec: /usr/local/bin/chandrad-rollback
+exec: CHANDRA_DISCORD_BOT_TOKEN=<token> CHANDRA_DISCORD_CHANNEL_ID=1478847178058367088 /usr/local/bin/chandrad-autoupdate
 ```
 
-To roll back to a specific version (use prefix from the list):
+Or just ask Chandra: "check for updates and deploy if there are any"
+
+## Logs
+
 ```bash
-exec: /usr/local/bin/chandrad-rollback 20260305_234009
+exec: tail -30 /tmp/chandrad-autoupdate.log    # auto-update wrapper log
+exec: tail -30 /tmp/chandrad-update.log         # binary swap + health check log
+exec: cat /tmp/chandrad-update-result           # last update outcome
 ```
-
-To roll back to the most recent previous version:
-```bash
-exec: /usr/local/bin/chandrad-rollback --latest
-```
-
-## Version archive
-
-Archived versions are stored in `/usr/local/lib/chandra/versions/`.
-The last 5 versions are kept (configurable via `CHANDRA_VERSION_KEEP`).
-Archive name format: `YYYYMMDD_HHMMSS_<commit-or-tag>`.
-
-## Notes
-
-- Auto-update always runs `make test` first — broken code is never deployed
-- If the new binary fails the 30s health check, chandrad-update rolls back automatically
-- If pinned: the skill reports the pin status and takes no action
-- The `update.pin` file path: `~/.config/chandra/update.pin`
-- Schedule can be changed by editing the `cron.interval` in this SKILL.md frontmatter
