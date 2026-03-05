@@ -77,7 +77,9 @@ go test ./skills/context/... -v
 go test ./internal/memory/episodic/... -run "RecentAcrossSessions" -v
 ```
 
-### Known Failures (not regressions)
+### Known Failures
+
+None. `go test ./...` exits 0.
 
 | Test | Package | Reason | Tracking |
 |------|---------|--------|---------|
