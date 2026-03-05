@@ -2,6 +2,7 @@ package episodic_test
 
 import (
 	"context"
+	"fmt"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -175,4 +176,105 @@ func TestEpisodicStore_SessionIsolation(t *testing.T) {
 	for _, ep := range got2 {
 		assert.Equal(t, "session-2", ep.SessionID)
 	}
+}
+
+// TestEpisodicStore_RecentAcrossSessions verifies that RecentAcrossSessions
+// returns episodes from multiple sessions for the same channel+user pair,
+// in descending timestamp order, up to the requested limit.
+func TestEpisodicStore_RecentAcrossSessions(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+
+	// Two sessions for the same user/channel.
+	_, err := db.Exec(
+		`INSERT INTO sessions (id, conversation_id, channel_id, user_id, started_at, last_active) VALUES (?,?,?,?,?,?)`,
+		"sess-A", "conv-A", "ch-X", "user-X", time.Now().UnixMilli(), time.Now().UnixMilli(),
+	)
+	require.NoError(t, err)
+	_, err = db.Exec(
+		`INSERT INTO sessions (id, conversation_id, channel_id, user_id, started_at, last_active) VALUES (?,?,?,?,?,?)`,
+		"sess-B", "conv-B", "ch-X", "user-X", time.Now().UnixMilli(), time.Now().UnixMilli(),
+	)
+	require.NoError(t, err)
+
+	// A third session for a different user — should NOT appear in results.
+	_, err = db.Exec(
+		`INSERT INTO sessions (id, conversation_id, channel_id, user_id, started_at, last_active) VALUES (?,?,?,?,?,?)`,
+		"sess-other", "conv-other", "ch-X", "user-Y", time.Now().UnixMilli(), time.Now().UnixMilli(),
+	)
+	require.NoError(t, err)
+
+	st := episodic.NewStore(db)
+	base := time.Now()
+
+	// Append two episodes to sess-A and two to sess-B, interleaved timestamps.
+	epA1 := pkg.Episode{ID: "eA1", SessionID: "sess-A", Role: "user", Content: "session A first", Timestamp: base.Add(-4 * time.Second)}
+	epA2 := pkg.Episode{ID: "eA2", SessionID: "sess-A", Role: "assistant", Content: "session A second", Timestamp: base.Add(-2 * time.Second)}
+	epB1 := pkg.Episode{ID: "eB1", SessionID: "sess-B", Role: "user", Content: "session B first", Timestamp: base.Add(-3 * time.Second)}
+	epB2 := pkg.Episode{ID: "eB2", SessionID: "sess-B", Role: "assistant", Content: "session B second", Timestamp: base.Add(-1 * time.Second)}
+	epOther := pkg.Episode{ID: "eOther", SessionID: "sess-other", Role: "user", Content: "other user episode", Timestamp: base}
+
+	for _, ep := range []pkg.Episode{epA1, epA2, epB1, epB2, epOther} {
+		require.NoError(t, st.Append(ctx, ep))
+	}
+
+	// Should return all 4 episodes for user-X, newest first, excluding user-Y.
+	got, err := st.RecentAcrossSessions(ctx, "ch-X", "user-X", 10)
+	require.NoError(t, err)
+	assert.Len(t, got, 4, "should return episodes from both sessions")
+
+	// Newest first: eB2 (-1s), eA2 (-2s), eB1 (-3s), eA1 (-4s)
+	assert.Equal(t, "eB2", got[0].ID, "newest episode first")
+	assert.Equal(t, "eA2", got[1].ID)
+	assert.Equal(t, "eB1", got[2].ID)
+	assert.Equal(t, "eA1", got[3].ID, "oldest episode last")
+
+	// Verify user-Y episode is absent.
+	for _, ep := range got {
+		assert.NotEqual(t, "eOther", ep.ID, "other user episode must not appear")
+	}
+}
+
+// TestEpisodicStore_RecentAcrossSessions_Limit verifies the n parameter is respected.
+func TestEpisodicStore_RecentAcrossSessions_Limit(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+
+	_, err := db.Exec(
+		`INSERT INTO sessions (id, conversation_id, channel_id, user_id, started_at, last_active) VALUES (?,?,?,?,?,?)`,
+		"sess-lim", "conv-lim", "ch-lim", "user-lim", time.Now().UnixMilli(), time.Now().UnixMilli(),
+	)
+	require.NoError(t, err)
+
+	st := episodic.NewStore(db)
+	base := time.Now()
+	for i := 0; i < 5; i++ {
+		ep := pkg.Episode{
+			ID:        fmt.Sprintf("e%d", i),
+			SessionID: "sess-lim",
+			Role:      "user",
+			Content:   fmt.Sprintf("message %d", i),
+			Timestamp: base.Add(time.Duration(i) * time.Second),
+		}
+		require.NoError(t, st.Append(ctx, ep))
+	}
+
+	got, err := st.RecentAcrossSessions(ctx, "ch-lim", "user-lim", 3)
+	require.NoError(t, err)
+	assert.Len(t, got, 3, "limit should be respected")
+	// Most recent 3 are e4, e3, e2
+	assert.Equal(t, "e4", got[0].ID)
+	assert.Equal(t, "e3", got[1].ID)
+	assert.Equal(t, "e2", got[2].ID)
+}
+
+// TestEpisodicStore_RecentAcrossSessions_Empty verifies empty result for unknown user.
+func TestEpisodicStore_RecentAcrossSessions_Empty(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	st := episodic.NewStore(db)
+
+	got, err := st.RecentAcrossSessions(ctx, "no-such-channel", "no-such-user", 10)
+	require.NoError(t, err)
+	assert.Empty(t, got)
 }
