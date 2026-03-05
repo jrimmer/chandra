@@ -41,7 +41,62 @@ func NewStore(db *sql.DB, embedder provider.EmbeddingProvider) (*Store, error) {
 	if dims <= 0 {
 		return nil, fmt.Errorf("semantic: embedder reports invalid dimension count %d", dims)
 	}
+	// Reconcile the vec0 table dimensions with the embedder.
+	// vec0 rejects inserts whose vector length doesn't match the schema, so if
+	// the configured embedding model changed (e.g. OpenAI 1536 → Ollama 768),
+	// drop and recreate the table. Embeddings are a derived value — they can
+	// always be rebuilt from the source text in memory_entries.
+	if err := reconcileEmbeddingDims(db, dims); err != nil {
+		return nil, fmt.Errorf("semantic: reconcile dims: %w", err)
+	}
 	return &Store{db: db, embedder: embedder, dims: dims}, nil
+}
+
+// reconcileEmbeddingDims checks the declared dimension of the memory_embeddings
+// vec0 table and recreates it when it doesn't match dims.
+func reconcileEmbeddingDims(db *sql.DB, dims int) error {
+	// vec0 stores metadata we can query: check the declared schema name
+	// via sqlite_schema to detect a mismatch without inserting a probe vector.
+	// The CREATE TABLE statement looks like: ... FLOAT[N] ...
+	var createSQL string
+	err := db.QueryRow(
+		`SELECT sql FROM sqlite_schema WHERE type='table' AND name='memory_embeddings'`,
+	).Scan(&createSQL)
+	if err != nil {
+		// Table doesn't exist yet — migration hasn't run or this is a fresh DB.
+		// Let the migration handle creation; nothing to reconcile.
+		return nil
+	}
+
+	// Parse the declared dimension from FLOAT[N] in the CREATE TABLE SQL.
+	declaredDims := 0
+	if idx := strings.Index(createSQL, "FLOAT["); idx != -1 {
+		rest := createSQL[idx+6:]
+		if end := strings.Index(rest, "]"); end != -1 {
+			_, _ = fmt.Sscanf(rest[:end], "%d", &declaredDims)
+		}
+	}
+
+	if declaredDims == 0 || declaredDims == dims {
+		// Unknown schema or dimensions match — nothing to do.
+		return nil
+	}
+
+	// Mismatch: recreate the vec0 table with the correct dimensions.
+	// memory_entries (the text content) is preserved; only the derived
+	// embedding vectors are dropped.
+	_, err = db.Exec(`DROP TABLE IF EXISTS memory_embeddings`)
+	if err != nil {
+		return fmt.Errorf("drop memory_embeddings: %w", err)
+	}
+	_, err = db.Exec(fmt.Sprintf(
+		`CREATE VIRTUAL TABLE memory_embeddings USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[%d])`,
+		dims,
+	))
+	if err != nil {
+		return fmt.Errorf("recreate memory_embeddings (%d dims): %w", dims, err)
+	}
+	return nil
 }
 
 // ComputeImportance derives an importance score from the content text and
@@ -127,13 +182,20 @@ func (s *Store) StoreBatch(ctx context.Context, entries []pkg.MemoryEntry) error
 func (s *Store) Query(ctx context.Context, embedding []float32, topN int) ([]pkg.MemoryEntry, error) {
 	serialized := store.SerializeFloat32(embedding)
 
+	// Use the vec0 MATCH operator for KNN search. This engages sqlite-vec's
+	// SIMD-optimised scan path rather than a pure Go-side cosine loop, and is
+	// the correct API for ordered top-N retrieval on vec0 tables.
 	const q = `
 		SELECT m.id, m.content, m.source, m.timestamp, m.importance,
-		       vec_distance_cosine(e.embedding, ?) AS distance
-		FROM memory_embeddings e
-		JOIN memory_entries m ON m.id = e.id
-		ORDER BY distance ASC
-		LIMIT ?`
+		       v.distance
+		FROM (
+		    SELECT id, distance
+		    FROM memory_embeddings
+		    WHERE embedding MATCH ? AND k = ?
+		    ORDER BY distance
+		) v
+		JOIN memory_entries m ON m.id = v.id
+		ORDER BY v.distance ASC`
 
 	rows, err := s.db.QueryContext(ctx, q, serialized, topN)
 	if err != nil {
