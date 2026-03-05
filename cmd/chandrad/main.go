@@ -523,6 +523,21 @@ func run(ctx context.Context, safeMode bool) error {
 					if !ok {
 						return
 					}
+					// Proactive backoff: if this is a channel-broadcast scheduled turn
+					// (UserID is empty = no specific recipient) AND the channel has been
+					// active in the last 5 minutes, skip this fire and reschedule normally.
+					// This prevents heartbeats from firing into ongoing conversations and
+					// creating duplicate/confusing responses alongside direct @mentions.
+					if turn.UserID == "" && turn.ChannelID != "" && turn.RecurrenceInterval > 0 {
+						if recentChannelActivity(ctx, db, turn.ChannelID, 5*time.Minute) {
+							slog.Info("scheduler: skipping proactive turn — channel recently active",
+								"intent", turn.IntentID, "channel", turn.ChannelID)
+							nextCheck := time.Now().Add(turn.RecurrenceInterval)
+							_ = inStore.Reschedule(ctx, turn.IntentID, nextCheck)
+							continue
+						}
+					}
+
 					// Record the scheduled turn to the ActionLog.
 					_ = alog.Record(ctx, actionlog.ActionEntry{
 						Type:      actionlog.ActionScheduled,
@@ -1654,6 +1669,22 @@ func parseJoinCommand(content string) (string, bool) {
 	// Reject codes with spaces (only the first token is the code).
 	fields := strings.Fields(rest)
 	return fields[0], true
+}
+
+// recentChannelActivity returns true if any session in channelID has been
+// active within the given window. Used to suppress proactive scheduled turns
+// (heartbeats, skill crons) when a conversation is already in flight.
+func recentChannelActivity(ctx context.Context, db *sql.DB, channelID string, window time.Duration) bool {
+	threshold := time.Now().Add(-window).UnixMilli()
+	var lastActive int64
+	err := db.QueryRowContext(ctx,
+		`SELECT MAX(last_active) FROM sessions WHERE channel_id = ? AND user_id != ''`,
+		channelID,
+	).Scan(&lastActive)
+	if err != nil {
+		return false // on error, don't suppress
+	}
+	return lastActive > threshold
 }
 
 // expandPath expands ~ to the user's home directory.
