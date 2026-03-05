@@ -506,16 +506,25 @@ func run(ctx context.Context, safeMode bool) error {
 						slog.Warn("chandrad: discord: agent loop not available, dropping message")
 						continue
 					}
-					resp, runErr := agentLoop.Run(ctx, sess, msg)
-					if runErr != nil {
-						slog.Error("chandrad: agent loop error", "err", runErr)
-						continue
-					}
-					_ = discordDC.Send(ctx, channels.OutboundMessage{
-						ChannelID: msg.ChannelID,
-						Content:   resp,
-						ReplyToID: msg.ID,
-					})
+					// Dispatch per-message goroutine so one slow/hung LLM call
+					// never starves subsequent messages.
+					go func(sess *agent.Session, msg channels.InboundMessage) {
+							// Per-call LLM timeout: 90s is generous for complex multi-tool turns.
+						callCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+						defer cancel()
+
+							resp, runErr := agentLoop.Run(callCtx, sess, msg)
+						slog.Info("chandrad: agent loop returned", "err", runErr)
+						if runErr != nil {
+							slog.Error("chandrad: agent loop error", "err", runErr)
+							return
+						}
+						_ = discordDC.Send(ctx, channels.OutboundMessage{
+							ChannelID: msg.ChannelID,
+							Content:   resp,
+							ReplyToID: msg.ID,
+						})
+					}(sess, msg)
 				case <-ctx.Done():
 					return
 				}

@@ -1157,6 +1157,8 @@ func init() {
 	// Config subcommands.
 	configCmd.AddCommand(configShowCmd, configValidateCmd, configSchemaCmd)
 	rootCmd.AddCommand(configCmd)
+	securityCmd.AddCommand(securityAuditCmd)
+	rootCmd.AddCommand(securityCmd)
 }
 
 // resolveDefaultConfigPath returns the default config file path, respecting
@@ -1318,4 +1320,136 @@ func resolveChannelIDs(adapter string) []string {
 		return nil
 	}
 	return cfg.Channels.Discord.ChannelIDs
+}
+
+// ---------------------------------------------------------------------------
+// security command
+// ---------------------------------------------------------------------------
+
+// securityCmd is the parent for security-related subcommands.
+var securityCmd = &cobra.Command{
+	Use:   "security",
+	Short: "Security operations",
+}
+
+// securityAuditCmd runs a local security audit of the Chandra installation.
+var securityAuditCmd = &cobra.Command{
+	SilenceUsage: true,
+	Use:   "audit",
+	Short: "Audit the security posture of the Chandra installation",
+	Long: `Checks file permissions, access policy, and config for common security issues.
+Exits 0 if all checks pass, 1 if any check fails or warns.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfgPath := resolveDefaultConfigPath()
+		cfgDir := filepath.Dir(cfgPath)
+		socketPath := api.SocketPath()
+
+		type result struct {
+			id  string
+			ok  bool
+			msg string
+		}
+		var results []result
+		allOK := true
+
+		check := func(id string, ok bool, msg string) {
+			results = append(results, result{id, ok, msg})
+			if !ok {
+				allOK = false
+			}
+		}
+
+		// 1.6.1 config.toml permissions
+		if fi, err := os.Stat(cfgPath); err == nil {
+			mode := fi.Mode().Perm()
+			check("1.6.1", mode&0o077 == 0,
+				fmt.Sprintf("config.toml: %04o (want <=0600)", mode))
+		} else {
+			check("1.6.1", false, fmt.Sprintf("config.toml: not found (%v)", err))
+		}
+
+		// 1.6.2 secrets.toml permissions (optional file)
+		secretsPath := filepath.Join(cfgDir, "secrets.toml")
+		if fi, err := os.Stat(secretsPath); err == nil {
+			mode := fi.Mode().Perm()
+			check("1.6.2", mode&0o077 == 0,
+				fmt.Sprintf("secrets.toml: %04o (want <=0600)", mode))
+		} else {
+			check("1.6.2", true, "secrets.toml: not present (OK)")
+		}
+
+		// 1.6.3 config dir permissions
+		if fi, err := os.Stat(cfgDir); err == nil {
+			mode := fi.Mode().Perm()
+			check("1.6.3", mode&0o077 == 0,
+				fmt.Sprintf("config dir: %04o (want <=0700)", mode))
+		} else {
+			check("1.6.3", false, fmt.Sprintf("config dir: not found (%v)", err))
+		}
+
+		// 1.6.4 Unix socket permissions (only meaningful when daemon is running)
+		if fi, err := os.Stat(socketPath); err == nil {
+			mode := fi.Mode().Perm()
+			check("1.6.4", mode&0o077 == 0,
+				fmt.Sprintf("socket: %04o (want <=0600)", mode))
+		} else {
+			check("1.6.4", true, "socket: not present (daemon not running -- OK)")
+		}
+
+		// 1.6.8 access policy warning
+		cfg, cfgErr := config.Load(cfgPath)
+		if cfgErr == nil && cfg.Channels.Discord != nil {
+			policy := cfg.Channels.Discord.AccessPolicy
+			open := policy == "open"
+			msg := fmt.Sprintf("access_policy: %q", policy)
+			if open {
+				msg += " -- WARN: open policy allows any Discord user to chat with the agent"
+			}
+			check("1.6.8", !open, msg)
+		}
+
+		// 1.6.9 plaintext secrets in config.toml
+		if raw, err := os.ReadFile(cfgPath); err == nil {
+			content := string(raw)
+			var findings []string
+			for _, kw := range []string{"api_key", "bot_token", "secret", "password"} {
+				for _, line := range strings.Split(content, "\n") {
+					lower := strings.ToLower(strings.TrimSpace(line))
+					if strings.HasPrefix(lower, kw) && strings.Contains(line, "=") {
+						parts := strings.SplitN(line, "=", 2)
+						val := strings.TrimSpace(parts[1])
+						val = strings.Trim(val, "\"'")
+						val = strings.TrimSpace(val)
+						if len(val) > 20 && !strings.HasPrefix(val, "$") && !strings.HasPrefix(val, "env:") {
+							findings = append(findings, kw)
+							break
+						}
+					}
+				}
+			}
+			if len(findings) > 0 {
+				check("1.6.9", false,
+					fmt.Sprintf("plaintext secrets in config.toml: %s -- move to environment variables or a secrets manager",
+						strings.Join(findings, ", ")))
+			} else {
+				check("1.6.9", true, "no plaintext secrets detected in config.toml")
+			}
+		}
+
+		// Print results
+		for _, r := range results {
+			mark := "v"
+			if !r.ok {
+				mark = "x"
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s [%s] %s\n", mark, r.id, r.msg)
+		}
+
+		if !allOK {
+			fmt.Fprintln(cmd.OutOrStdout())
+			return fmt.Errorf("security audit: one or more checks failed or warned")
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), "\nAll security checks passed.")
+		return nil
+	},
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"net/url"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -335,9 +336,36 @@ func validate(cfg *Config) error {
 	default:
 		errs = append(errs, fmt.Sprintf("provider.type %q is not valid (openai, anthropic, openrouter, ollama, custom)", cfg.Provider.Type))
 	}
-	if cfg.Provider.Type == "custom" && cfg.Provider.BaseURL != "" &&
-		!strings.HasPrefix(cfg.Provider.BaseURL, "https://") {
-		errs = append(errs, "provider.base_url must use HTTPS for custom endpoints")
+	// HTTPS enforcement: all non-ollama, non-loopback providers must use HTTPS.
+	// Ollama (local) and explicit loopback/localhost URLs are exempt.
+	{
+		isLocalURL := false
+		if u, err2 := url.Parse(cfg.Provider.BaseURL); err2 == nil {
+			h := u.Hostname()
+			isLocalURL = h == "localhost" || strings.HasPrefix(h, "127.") || h == "::1"
+		}
+		if cfg.Provider.BaseURL != "" && cfg.Provider.Type != "ollama" && !isLocalURL &&
+			!strings.HasPrefix(cfg.Provider.BaseURL, "https://") {
+			errs = append(errs, fmt.Sprintf("provider.base_url must use HTTPS (got %q) -- HTTP endpoints are not permitted for security reasons", cfg.Provider.BaseURL))
+		}
+	}
+	// SSRF guard: reject RFC-1918 private network addresses unless provider is ollama.
+	// Loopback (127.x, localhost) is allowed for local development.
+	if cfg.Provider.BaseURL != "" && cfg.Provider.Type != "ollama" {
+		if u, err := url.Parse(cfg.Provider.BaseURL); err == nil {
+			host := u.Hostname()
+			for _, prefix := range []string{
+				"10.", "172.16.", "172.17.", "172.18.", "172.19.",
+				"172.20.", "172.21.", "172.22.", "172.23.", "172.24.",
+				"172.25.", "172.26.", "172.27.", "172.28.", "172.29.",
+				"172.30.", "172.31.", "192.168.", "169.254.", "fc00:", "fd",
+			} {
+				if strings.HasPrefix(host, prefix) {
+					errs = append(errs, fmt.Sprintf("provider.base_url %q targets a private/loopback address -- SSRF guard rejected (use provider.type=ollama for local endpoints)", cfg.Provider.BaseURL))
+					break
+				}
+			}
+		}
 	}
 	// Guard against the common mistake of including /v1 in the Anthropic base URL.
 	// The Anthropic SDK appends /v1/messages itself; a trailing /v1 produces
