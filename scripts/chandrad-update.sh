@@ -1,41 +1,57 @@
 #!/usr/bin/env bash
-# chandrad-update.sh — safe in-place update with automatic rollback
+# chandrad-update.sh — safe in-place update with version archive and automatic rollback
 #
 # Usage: chandrad-update.sh <new_binary_path>
 #
+# Environment overrides:
+#   CHANDRA_BIN          Production binary path (default: /usr/local/bin/chandrad)
+#   CHANDRA_CLI          CLI binary path (default: /usr/local/bin/chandra)
+#   CHANDRA_VERSION_DIR  Version archive directory (default: /usr/local/lib/chandra/versions)
+#   CHANDRA_VERSION_KEEP Number of versions to retain (default: 5)
+#   CHANDRA_UPDATE_WAIT  Health poll timeout seconds (default: 30)
+#   CHANDRA_UPDATE_LOG   Log file path (default: /tmp/chandrad-update.log)
+#   CHANDRA_ALERT_WEBHOOK  Discord webhook URL for catastrophic failure alerts
+#
 # Workflow:
 #   1. Validate new binary
-#   2. Backup current binary → chandrad.bak
-#   3. Install new binary
-#   4. Kill running daemon (if any)
-#   5. Start new daemon
-#   6. Poll health for up to MAX_WAIT seconds
-#   7. If healthy → report success
-#   8. If unhealthy → kill new daemon, restore backup, restart old, report failure
-#
-# All output is written to LOG_FILE, which the new daemon can read on first
-# interaction to report the update result.
+#   2. Archive current version (timestamped, with commit hash)
+#   3. Rotate old archives (keep last CHANDRA_VERSION_KEEP)
+#   4. Atomic install (install + mv to avoid EBUSY on running binary)
+#   5. Kill running daemon
+#   6. Start new daemon
+#   7. Poll health for up to CHANDRA_UPDATE_WAIT seconds
+#   8. Success → write result file, exit 0
+#   9. Failure → kill new daemon, restore most-recent archive, exit 1
 
 set -euo pipefail
 
 NEW_BIN="${1:?usage: chandrad-update.sh <new_binary_path>}"
 PROD_BIN="${CHANDRA_BIN:-/usr/local/bin/chandrad}"
-BACKUP_BIN="${PROD_BIN}.bak"
+BACKUP_BIN="${PROD_BIN}.bak"   # kept for daemon.restart compatibility
+VERSION_DIR="${CHANDRA_VERSION_DIR:-/usr/local/lib/chandra/versions}"
+VERSION_KEEP="${CHANDRA_VERSION_KEEP:-5}"
 HEALTH_CMD="${CHANDRA_CLI:-/usr/local/bin/chandra}"
 MAX_WAIT="${CHANDRA_UPDATE_WAIT:-30}"
 LOG_FILE="${CHANDRA_UPDATE_LOG:-/tmp/chandrad-update.log}"
+RESULT_FILE="/tmp/chandrad-update-result"
 
-# ── helpers ─────────────────────────────────────────────────────────────────
+# ── helpers ──────────────────────────────────────────────────────────────────
 
 log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" | tee -a "$LOG_FILE"; }
 
 health_ok() { "$HEALTH_CMD" health 2>/dev/null | grep -qi "ok\|healthy\|running"; }
 
+atomic_install() {
+    local src="$1" dst="$2"
+    local tmp="${dst}.tmp.$$"
+    sudo install -m 755 "$src" "$tmp"
+    sudo mv "$tmp" "$dst"
+}
+
 kill_daemon() {
     if pgrep -x chandrad > /dev/null 2>&1; then
         log "Stopping chandrad..."
         pkill -x chandrad 2>/dev/null || true
-        # Wait up to 10s for it to stop
         for i in $(seq 1 10); do
             sleep 1
             if ! pgrep -x chandrad > /dev/null 2>&1; then
@@ -47,102 +63,143 @@ kill_daemon() {
         pkill -9 -x chandrad 2>/dev/null || true
         sleep 1
     else
-        log "Daemon not running."
+        log "Daemon was not running."
     fi
 }
 
 start_daemon() {
-    local binary="$1"
-    log "Starting daemon: $binary"
-    nohup "$binary" >> "$LOG_FILE" 2>&1 &
+    log "Starting daemon: $PROD_BIN"
+    nohup "$PROD_BIN" >> "$LOG_FILE" 2>&1 &
     disown
 }
 
-rollback() {
+# ── version archiving ────────────────────────────────────────────────────────
+
+archive_current() {
+    if [[ ! -f "$PROD_BIN" ]]; then
+        log "WARNING: no existing binary to archive at $PROD_BIN"
+        return
+    fi
+
+    sudo mkdir -p "$VERSION_DIR"
+
+    # Build archive name: YYYYMMDD_HHMMSS_<commit>
+    # Try to get commit hash from new binary's source repo context
+    local commit="unknown"
+    local chandra_repo
+    chandra_repo="$(find /home/deploy /root -maxdepth 3 -name '.git' -type d 2>/dev/null | head -1 | xargs dirname 2>/dev/null || true)"
+    if [[ -n "$chandra_repo" && -d "$chandra_repo/.git" ]]; then
+        commit=$(git -C "$chandra_repo" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+        # Use tag name if HEAD is tagged
+        local tag
+        tag=$(git -C "$chandra_repo" describe --exact-match HEAD 2>/dev/null || true)
+        if [[ -n "$tag" ]]; then
+            commit="${tag}"
+        fi
+    fi
+
+    local timestamp
+    timestamp=$(date -u +%Y%m%d_%H%M%S)
+    local archive_name="${timestamp}_${commit}"
+    local archive_path="${VERSION_DIR}/${archive_name}"
+
+    log "Archiving current binary → ${archive_path}"
+    sudo install -m 755 "$PROD_BIN" "$archive_path"
+
+    # Also update the .bak symlink for daemon.restart compatibility
+    atomic_install "$PROD_BIN" "$BACKUP_BIN"
+
+    # Rotate: keep only the last VERSION_KEEP versions
+    local count
+    count=$(sudo ls -1t "$VERSION_DIR" | wc -l)
+    if (( count > VERSION_KEEP )); then
+        local to_remove=$(( count - VERSION_KEEP ))
+        sudo ls -1t "$VERSION_DIR" | tail -n "$to_remove" | while read -r old; do
+            log "Rotating old version: $old"
+            sudo rm -f "${VERSION_DIR}/${old}"
+        done
+    fi
+}
+
+rollback_to_latest_archive() {
     log "─── ROLLBACK INITIATED ───"
     kill_daemon
-    if [[ -f "$BACKUP_BIN" ]]; then
-        log "Restoring backup: $BACKUP_BIN → $PROD_BIN"
-        ROLLBACK_TMP="${PROD_BIN}.rbk.$$"
-        sudo install -m 755 "$BACKUP_BIN" "$ROLLBACK_TMP"
-        sudo mv "$ROLLBACK_TMP" "$PROD_BIN"
-        start_daemon "$PROD_BIN"
-        sleep 3
-        if health_ok; then
-            log "✅ Rollback successful — previous version is running."
+
+    # Find most recent archived version
+    local latest
+    latest=$(sudo ls -1t "$VERSION_DIR" 2>/dev/null | head -1 || true)
+
+    if [[ -z "$latest" ]]; then
+        # Fall back to .bak
+        if [[ -f "$BACKUP_BIN" ]]; then
+            log "No archive found; restoring .bak"
+            atomic_install "$BACKUP_BIN" "$PROD_BIN"
         else
-            log "🚨 CRITICAL: rollback daemon failed health check."
-            log "   Manual recovery required."
-            log "   Backup binary: $BACKUP_BIN"
-            log "   Start manually: sudo $PROD_BIN"
-            # Attempt direct Discord notification via webhook if configured
+            log "🚨 CRITICAL: no archive or .bak found — manual intervention required."
             if [[ -n "${CHANDRA_ALERT_WEBHOOK:-}" ]]; then
                 curl -sf -X POST "$CHANDRA_ALERT_WEBHOOK" \
                     -H "Content-Type: application/json" \
-                    -d "{\"content\":\"🚨 chandrad rollback failed — manual intervention required. Backup at \`$BACKUP_BIN\`\"}" \
+                    -d '{"content":"🚨 chandrad rollback failed — no archive or backup found. Manual intervention required."}' \
                     > /dev/null 2>&1 || true
             fi
+            exit 1
         fi
     else
-        log "🚨 CRITICAL: no backup found at $BACKUP_BIN — cannot roll back."
-        log "   Reinstall chandrad manually."
+        log "Restoring archive: $latest"
+        atomic_install "${VERSION_DIR}/${latest}" "$PROD_BIN"
+    fi
+
+    start_daemon
+    sleep 3
+
+    if health_ok; then
+        log "✅ Rollback successful — previous version is running."
+    else
+        log "🚨 CRITICAL: rollback daemon failed health check."
+        log "   Archive directory: $VERSION_DIR"
+        log "   Start manually: sudo $PROD_BIN"
+        if [[ -n "${CHANDRA_ALERT_WEBHOOK:-}" ]]; then
+            curl -sf -X POST "$CHANDRA_ALERT_WEBHOOK" \
+                -H "Content-Type: application/json" \
+                -d '{"content":"🚨 chandrad rollback daemon failed health check. Manual intervention required."}' \
+                > /dev/null 2>&1 || true
+        fi
     fi
     exit 1
 }
 
 # ── main ─────────────────────────────────────────────────────────────────────
 
-# Rotate log so fresh run is easy to read
 echo "" >> "$LOG_FILE"
 log "══════════════════════════════════════"
 log "chandrad-update started"
-log "  new binary : $NEW_BIN"
-log "  prod path  : $PROD_BIN"
-log "  backup     : $BACKUP_BIN"
+log "  new binary   : $NEW_BIN"
+log "  prod path    : $PROD_BIN"
+log "  version dir  : $VERSION_DIR (keep=${VERSION_KEEP})"
 log "══════════════════════════════════════"
 
-# 1. Validate new binary
+# 1. Validate
 if [[ ! -f "$NEW_BIN" ]]; then
     log "ERROR: new binary not found: $NEW_BIN"
     exit 1
 fi
-if [[ ! -x "$NEW_BIN" ]]; then
-    log "Making new binary executable"
-    chmod +x "$NEW_BIN"
-fi
+[[ -x "$NEW_BIN" ]] || chmod +x "$NEW_BIN"
 
-# Quick sanity check — run --version or --help; if it segfaults, abort early
-if ! "$NEW_BIN" --help > /dev/null 2>&1 && ! "$NEW_BIN" version > /dev/null 2>&1; then
-    log "WARNING: new binary failed --help/version check (may be OK, continuing)"
-fi
+# 2 & 3. Archive current + rotate
+archive_current
 
-# 2. Backup current binary
-if [[ -f "$PROD_BIN" ]]; then
-    log "Backing up $PROD_BIN → $BACKUP_BIN"
-    # Use install (not cp) to avoid "Text file busy" on running binary
-    sudo install -m 755 "$PROD_BIN" "$BACKUP_BIN"
-else
-    log "WARNING: no existing binary at $PROD_BIN — no backup created"
-fi
-
-# 3. Install new binary
-# On Linux, cp over a running binary causes "Text file busy".
-# Use install to a temp path then mv (atomic rename) to swap the inode.
+# 4. Atomic install
 log "Installing new binary → $PROD_BIN"
-PROD_TMP="${PROD_BIN}.tmp.$$"
-sudo install -m 755 "$NEW_BIN" "$PROD_TMP"
-sudo mv "$PROD_TMP" "$PROD_BIN"
+atomic_install "$NEW_BIN" "$PROD_BIN"
 
-# 4. Kill old daemon
+# 5. Kill old daemon
 kill_daemon
-
-# Brief pause to let OS settle
 sleep 1
 
-# 5. Start new daemon
-start_daemon "$PROD_BIN"
+# 6. Start new daemon
+start_daemon
 
-# 6. Health poll
+# 7. Health poll
 log "Health polling (max ${MAX_WAIT}s)..."
 HEALTHY=false
 for i in $(seq 1 "$MAX_WAIT"); do
@@ -158,12 +215,11 @@ if [[ "$HEALTHY" == "true" ]]; then
     log "══════════════════════════════════════"
     log "✅ Update complete — new version running."
     log "══════════════════════════════════════"
-    # Write a status file the new daemon can surface to the user
-    echo "update_ok:$(date -u +%Y-%m-%dT%H:%M:%SZ):$NEW_BIN" > /tmp/chandrad-update-result
+    echo "update_ok:$(date -u +%Y-%m-%dT%H:%M:%SZ):$NEW_BIN" > "$RESULT_FILE"
     exit 0
 fi
 
-# 7. Health check failed — roll back
+# 8. Health failed — roll back
 log "Health check failed after ${MAX_WAIT}s."
-echo "update_failed:$(date -u +%Y-%m-%dT%H:%M:%SZ):rollback" > /tmp/chandrad-update-result
-rollback
+echo "update_failed:$(date -u +%Y-%m-%dT%H:%M:%SZ):rollback" > "$RESULT_FILE"
+rollback_to_latest_archive
