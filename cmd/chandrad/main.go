@@ -1854,17 +1854,21 @@ func registeredToolNames(reg tools.Registry) map[string]bool {
 // chunkMessage splits text into Discord-safe segments of at most maxLen runes,
 // splitting on newline boundaries where possible.
 // isQUIETResponse returns true if the response should be suppressed.
-// Matches exact QUIET, or responses where the last non-empty line is QUIET
-// (model sometimes writes a brief summary then appends QUIET on its own line).
+// Matches QUIET (case-insensitive), known model typos (QUICK), or responses
+// where the last non-empty line is one of the above.
 func isQUIETResponse(resp string) bool {
+	isSignal := func(s string) bool {
+		upper := strings.ToUpper(strings.TrimSpace(s))
+		return upper == "QUIET" || upper == "QUICK" // QUICK is a known Kimi typo for QUIET
+	}
 	trimmed := strings.TrimSpace(resp)
-	if trimmed == "QUIET" {
+	if isSignal(trimmed) {
 		return true
 	}
 	lines := strings.Split(trimmed, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		if l := strings.TrimSpace(lines[i]); l != "" {
-			return l == "QUIET"
+			return isSignal(l)
 		}
 	}
 	return false
