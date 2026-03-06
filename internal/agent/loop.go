@@ -134,6 +134,12 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 	// Steps 2-3: Retrieve semantic memories and assemble context window.
 	// Prepend identity system prompt as the highest-priority fixed candidate.
 	fixed := buildIdentityCandidate(l.cfg.Memory, l.cfg.PersonaFile)
+	// RecentAcrossSessions returns episodes newest-first (ORDER BY timestamp DESC).
+	// Reverse to chronological order so the LLM sees the conversation correctly
+	// (oldest context first, most recent exchange just before the current message).
+	for i, j := 0, len(recentEps)-1; i < j; i, j = i+1, j-1 {
+		recentEps[i], recentEps[j] = recentEps[j], recentEps[i]
+	}
 	fixed = append(fixed, episodesToCandidates(recentEps)...)
 
 	// Step 4: Apply tool allowlist (before assembly so window carries the right tools).
