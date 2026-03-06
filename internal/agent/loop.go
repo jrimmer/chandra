@@ -309,13 +309,6 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 	ppUserID      := session.UserID
 	ppNow         := time.Now().UTC()
 
-	// Emit Done now — the response has been assembled and will be sent by the caller.
-	l.emitDelivery(channels.DeliveryEvent{
-		Kind:      channels.DeliveryDone,
-		MessageID: msg.ID,
-		ChannelID: msg.ChannelID,
-	})
-
 	l.ppWg.Add(1)
 	go func() {
 		defer l.ppWg.Done()

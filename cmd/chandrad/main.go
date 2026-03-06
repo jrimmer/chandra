@@ -637,20 +637,38 @@ func run(ctx context.Context, safeMode bool) error {
 			convQueues[convID] = q
 			go func() {
 				for cm := range q {
-					callCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+					callCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 					callCtx = scheduletool.WithDelivery(callCtx, cm.msg.ChannelID, cm.msg.UserID)
 					resp, runErr := agentLoop.Run(callCtx, cm.sess, cm.msg)
 					cancel()
+
+					// Emit Done or Error after Run() returns — not inside Run() —
+					// so the reaction only fires once we know the outcome.
+					if du, ok := discordChannel.(channels.DeliveryUpdater); ok {
+						kind := channels.DeliveryDone
+						if runErr != nil {
+							kind = channels.DeliveryError
+						}
+						du.OnDeliveryEvent(channels.DeliveryEvent{
+							Kind:      kind,
+							MessageID: cm.msg.ID,
+							ChannelID: cm.msg.ChannelID,
+						})
+					}
+
 					if runErr != nil {
 						slog.Error("chandrad: agent loop error",
 							"conversation", convID, "err", runErr)
 						continue
 					}
-					_ = discordDC.Send(ctx, channels.OutboundMessage{
+					if sendErr := discordDC.Send(ctx, channels.OutboundMessage{
 						ChannelID: cm.msg.ChannelID,
 						Content:   resp,
 						ReplyToID: cm.msg.ID,
-					})
+					}); sendErr != nil {
+						slog.Error("chandrad: discord send failed",
+							"conversation", convID, "err", sendErr)
+					}
 				}
 				convMu.Lock()
 				delete(convQueues, convID)
