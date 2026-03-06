@@ -85,7 +85,8 @@ type noopChannel struct{}
 
 func (c *noopChannel) ID() string                                                              { return "noop" }
 func (c *noopChannel) Listen(_ context.Context, _ chan<- channels.InboundMessage) error       { return nil }
-func (c *noopChannel) Send(_ context.Context, _ channels.OutboundMessage) error               { return nil }
+func (c *noopChannel) Send(_ context.Context, _ channels.OutboundMessage) (string, error)     { return "", nil }
+func (c *noopChannel) Edit(_ context.Context, _, _, _ string) error                             { return nil }
 func (c *noopChannel) React(_ context.Context, _, _ string) error                             { return nil }
 func (c *noopChannel) SendCheckpoint(_ context.Context, _, _ string) error                    { return nil }
 func (c *noopChannel) Reconnect(_ context.Context) error                                      { return nil }

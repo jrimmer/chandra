@@ -211,7 +211,8 @@ type mockChannel struct{}
 
 func (m *mockChannel) ID() string                                                        { return "mock" }
 func (m *mockChannel) Listen(_ context.Context, _ chan<- channels.InboundMessage) error { return nil }
-func (m *mockChannel) Send(_ context.Context, _ channels.OutboundMessage) error         { return nil }
+func (m *mockChannel) Send(_ context.Context, _ channels.OutboundMessage) (string, error) { return "", nil }
+func (m *mockChannel) Edit(_ context.Context, _, _, _ string) error                          { return nil }
 func (m *mockChannel) React(_ context.Context, _, _ string) error                       { return nil }
 func (m *mockChannel) SendCheckpoint(_ context.Context, _, _ string) error              { return nil }
 func (m *mockChannel) Reconnect(_ context.Context) error                               { return nil }

@@ -48,14 +48,19 @@ func (s *ChannelSupervisor) ID() string { return s.inner.ID() }
 
 // Send delegates to the inner channel.
 // If the channel is not connected, the message is dropped with a warning.
-func (s *ChannelSupervisor) Send(ctx context.Context, msg OutboundMessage) error {
+func (s *ChannelSupervisor) Send(ctx context.Context, msg OutboundMessage) (string, error) {
 	state := s.inner.ConnectionState()
 	if state != StateConnected && state != StateUnknown {
 		slog.Warn("channel supervisor: dropping outbound message — channel not connected",
 			"channel", s.inner.ID(), "state", state.String())
-		return nil
+		return "", nil
 	}
 	return s.inner.Send(ctx, msg)
+}
+
+// Edit delegates message editing to the inner channel.
+func (s *ChannelSupervisor) Edit(ctx context.Context, channelID, messageID, content string) error {
+	return s.inner.Edit(ctx, channelID, messageID, content)
 }
 
 // React delegates to the inner channel.

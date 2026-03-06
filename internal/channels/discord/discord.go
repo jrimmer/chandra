@@ -283,10 +283,27 @@ func (d *Discord) Listen(ctx context.Context, msgs chan<- channels.InboundMessag
 }
 
 // Send transmits a message to the target channel specified in msg.ChannelID.
-func (d *Discord) Send(ctx context.Context, msg channels.OutboundMessage) error {
-	_, err := d.session.ChannelMessageSend(msg.ChannelID, msg.Content)
+// Returns the Discord message ID of the sent message, or "" on error.
+func (d *Discord) Send(ctx context.Context, msg channels.OutboundMessage) (string, error) {
+	var sent *discordgo.Message
+	var err error
+	if msg.ReplyToID != "" {
+		ref := &discordgo.MessageReference{MessageID: msg.ReplyToID, ChannelID: msg.ChannelID}
+		sent, err = d.session.ChannelMessageSendReply(msg.ChannelID, msg.Content, ref)
+	} else {
+		sent, err = d.session.ChannelMessageSend(msg.ChannelID, msg.Content)
+	}
 	if err != nil {
-		return fmt.Errorf("discord: send message: %w", err)
+		return "", fmt.Errorf("discord: send message: %w", err)
+	}
+	return sent.ID, nil
+}
+
+// Edit replaces the content of a previously sent message.
+func (d *Discord) Edit(ctx context.Context, channelID, messageID, content string) error {
+	_, err := d.session.ChannelMessageEdit(channelID, messageID, content)
+	if err != nil {
+		return fmt.Errorf("discord: edit message: %w", err)
 	}
 	return nil
 }

@@ -571,7 +571,7 @@ func run(ctx context.Context, safeMode bool) error {
 						isQuiet := strings.TrimSpace(resp) == "QUIET"
 						if resp != "" && !isQuiet && turn.ChannelID != "" && discordDC != nil {
 							for _, chunk := range chunkMessage(resp, 1900) {
-							_ = discordDC.Send(ctx, channels.OutboundMessage{
+							_, _ = discordDC.Send(ctx, channels.OutboundMessage{
 								ChannelID: turn.ChannelID,
 								Content:   chunk,
 							})
@@ -642,6 +642,18 @@ func run(ctx context.Context, safeMode bool) error {
 			convQueues[convID] = q
 			go func() {
 				for cm := range q {
+					// PD3: send placeholder immediately so the user sees a response
+					// token while the agent works; we'll edit it with the real content.
+					placeholderID, phErr := discordDC.Send(ctx, channels.OutboundMessage{
+						ChannelID: cm.msg.ChannelID,
+						Content:   "…",
+						ReplyToID: cm.msg.ID,
+					})
+					if phErr != nil {
+						slog.Warn("chandrad: placeholder send failed", "err", phErr)
+						placeholderID = ""
+					}
+
 					callCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 					callCtx = scheduletool.WithDelivery(callCtx, cm.msg.ChannelID, cm.msg.UserID)
 					resp, runErr := agentLoop.Run(callCtx, cm.sess, cm.msg)
@@ -664,14 +676,32 @@ func run(ctx context.Context, safeMode bool) error {
 					if runErr != nil {
 						slog.Error("chandrad: agent loop error",
 							"conversation", convID, "err", runErr)
+						// Edit the placeholder to show the error rather than leaving "…"
+						if placeholderID != "" {
+							_ = discordDC.Edit(ctx, cm.msg.ChannelID, placeholderID,
+								"⚠️ Something went wrong — please try again.")
+						}
 						continue
 					}
-					for i, chunk := range chunkMessage(resp, 1900) {
+
+					// Deliver response: edit the placeholder with the first chunk,
+					// send any overflow chunks as follow-up messages.
+					chunks := chunkMessage(resp, 1900)
+					if placeholderID != "" && len(chunks) > 0 {
+						if editErr := discordDC.Edit(ctx, cm.msg.ChannelID, placeholderID, chunks[0]); editErr != nil {
+							slog.Warn("chandrad: placeholder edit failed, falling back to send", "err", editErr)
+							placeholderID = "" // fall through to normal send below
+						} else {
+							chunks = chunks[1:] // first chunk delivered via edit
+						}
+					}
+					// Send first chunk normally if edit failed, or send overflow chunks.
+					for i, chunk := range chunks {
 						replyTo := ""
-						if i == 0 {
+						if i == 0 && placeholderID == "" {
 							replyTo = cm.msg.ID
 						}
-						if sendErr := discordDC.Send(ctx, channels.OutboundMessage{
+						if _, sendErr := discordDC.Send(ctx, channels.OutboundMessage{
 							ChannelID: cm.msg.ChannelID,
 							Content:   chunk,
 							ReplyToID: replyTo,
@@ -723,7 +753,7 @@ func run(ctx context.Context, safeMode bool) error {
 							reply = "Welcome! You've been granted access. Feel free to say hello."
 						}
 						if discordDC != nil {
-							_ = discordDC.Send(ctx, channels.OutboundMessage{
+							_, _ = discordDC.Send(ctx, channels.OutboundMessage{
 								ChannelID: msg.ChannelID,
 								Content:   reply,
 							})

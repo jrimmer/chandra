@@ -85,7 +85,11 @@ type DeliveryUpdater interface {
 type Channel interface {
 	ID() string
 	Listen(ctx context.Context, msgs chan<- InboundMessage) error
-	Send(ctx context.Context, msg OutboundMessage) error
+	Send(ctx context.Context, msg OutboundMessage) (string, error)
+	// Edit replaces the content of a previously sent message identified by
+	// messageID in channelID. Returns an error if the platform does not support
+	// message editing or if the message no longer exists.
+	Edit(ctx context.Context, channelID, messageID, content string) error
 	React(ctx context.Context, messageID, emoji string) error
 	// SendCheckpoint sends an interactive checkpoint message with approval options.
 	// Implementations may render buttons (Discord) or text commands (CLI).
