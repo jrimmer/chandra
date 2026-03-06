@@ -575,7 +575,9 @@ func run(ctx context.Context, safeMode bool) error {
 					} else {
 						// Deliver the response to the originating Discord channel.
 						// "QUIET" response means the agent checked but found nothing to say.
-						isQuiet := strings.TrimSpace(resp) == "QUIET"
+						// Also suppress if the last non-empty line is QUIET — model sometimes
+						// generates a brief summary then appends QUIET on its own line.
+						isQuiet := isQUIETResponse(resp)
 						if resp != "" && !isQuiet && turn.ChannelID != "" && discordDC != nil {
 							for _, chunk := range chunkMessage(resp, 1900) {
 							_, _ = discordDC.Send(ctx, channels.OutboundMessage{
@@ -1851,6 +1853,23 @@ func registeredToolNames(reg tools.Registry) map[string]bool {
 
 // chunkMessage splits text into Discord-safe segments of at most maxLen runes,
 // splitting on newline boundaries where possible.
+// isQUIETResponse returns true if the response should be suppressed.
+// Matches exact QUIET, or responses where the last non-empty line is QUIET
+// (model sometimes writes a brief summary then appends QUIET on its own line).
+func isQUIETResponse(resp string) bool {
+	trimmed := strings.TrimSpace(resp)
+	if trimmed == "QUIET" {
+		return true
+	}
+	lines := strings.Split(trimmed, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if l := strings.TrimSpace(lines[i]); l != "" {
+			return l == "QUIET"
+		}
+	}
+	return false
+}
+
 func chunkMessage(text string, maxLen int) []string {
 	if len([]rune(text)) <= maxLen {
 		return []string{text}
