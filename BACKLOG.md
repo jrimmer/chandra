@@ -42,6 +42,10 @@ Items are grouped by theme, each with a priority and source reference.
 | INTERNALS.md architecture reference | `d912fd4` | `~/chandra/INTERNALS.md` |
 | Per-conversation dispatch model | `011138c` | `convQueues`; one goroutine per conversation; cross-conv parallelism |
 | Message chunking at 1900 chars | `b8849b3` | newline-aware; fixes HTTP 400 on long responses |
+| **PD3: Edit-in-place delivery** (Layer 2) | `a39112a` | `Send()` returns message ID; `Edit()` on Channel interface; placeholder sent immediately, edited with final response; error edits placeholder with warning |
+| **SK5: Self-healing persona** | `a39112a` | persona.md: retry with alternatives on tool failure before escalating |
+| Scheduled turns suppress error messages | `4707e8d` | `RunScheduled()` filters "ran out of steps" as QUIET; heartbeat SKILL.md: must produce text or QUIET after tool calls |
+| Skill deps manifest | pre-existing | Already built: `requires.bins/env/tools` in frontmatter; `ValidateRequirements()` + `exec.LookPath`; `chandra skill list` shows unmet deps; seed skills declare deps |
 
 ---
 
