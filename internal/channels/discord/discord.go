@@ -61,6 +61,16 @@ type Discord struct {
 	msgChanMax int                // maximum entries in msgChanMap (default 10000)
 	done       bool               // true after shutdown; guards against send on closed channel
 	connState  channels.ConnectionState // current connection state
+
+	// handlerOnce ensures AddHandler is only called once across Listen calls.
+	// discordgo accumulates handlers — calling Listen after a supervisor reconnect
+	// would register duplicate handlers and cause every message to be processed twice.
+	handlerOnce sync.Once
+
+	// seenMsgIDs deduplicates inbound messages against Discord replay on reconnect.
+	seenMsgIDs   map[string]struct{}
+	seenMsgOrder []string
+	seenMsgMax   int
 }
 
 // NewDiscord constructs a Discord adapter with the given bot token and the list
@@ -90,12 +100,15 @@ func NewDiscord(token string, channelIDs []string) (*Discord, error) {
 	}
 
 	return &Discord{
-		session:    session,
-		channelIDs: allowed,
-		msgChanMap: make(map[string]string),
-		msgIDOrder: make([]string, 0, 100),
-		msgChanMax: 10000,
-		connState:  channels.StateUnknown,
+		session:      session,
+		channelIDs:   allowed,
+		msgChanMap:   make(map[string]string),
+		msgIDOrder:   make([]string, 0, 100),
+		msgChanMax:   10000,
+		connState:    channels.StateUnknown,
+		seenMsgIDs:   make(map[string]struct{}),
+		seenMsgOrder: make([]string, 0, 128),
+		seenMsgMax:   1024,
 	}, nil
 }
 
@@ -107,107 +120,125 @@ func (d *Discord) ID() string { return "discord" }
 // msgs. Listen blocks until ctx is cancelled, then closes the Discord session.
 // The caller owns the msgs channel and is responsible for draining it.
 func (d *Discord) Listen(ctx context.Context, msgs chan<- channels.InboundMessage) error {
+	d.handlerOnce.Do(func() {
 	d.session.AddHandler(func(s *discordgo.Session, m *discordgo.MessageCreate) {
-		// Ignore messages from the bot itself or any other bot.
-		// Bots should not be responding to each other in a loop.
-		if m.Author == nil || m.Author.ID == s.State.User.ID || m.Author.Bot {
-			return
-		}
-
-		// Only process messages from configured channels.
-		if _, ok := d.channelIDs[m.ChannelID]; !ok {
-			return
-		}
-
-		// Record messageID → channelID mapping for React, capping at msgChanMax
-		// via FIFO eviction to prevent unbounded memory growth.
-		d.mu.Lock()
-		if _, exists := d.msgChanMap[m.ID]; !exists {
-			d.msgChanMap[m.ID] = m.ChannelID
-			d.msgIDOrder = append(d.msgIDOrder, m.ID)
-			for len(d.msgIDOrder) > d.msgChanMax {
-				oldest := d.msgIDOrder[0]
-				d.msgIDOrder = d.msgIDOrder[1:]
-				delete(d.msgChanMap, oldest)
+			// Ignore messages from the bot itself or any other bot.
+			// Bots should not be responding to each other in a loop.
+			if m.Author == nil || m.Author.ID == s.State.User.ID || m.Author.Bot {
+				return
 			}
-		}
-		d.mu.Unlock()
 
-		meta := map[string]any{}
-
-		// Prompt injection detection.
-		if checkSuspicious(m.Content) {
-			slog.Warn("discord: suspicious message detected",
-				"message_id", m.ID,
-				"channel_id", m.ChannelID,
-				"user_id", m.Author.ID,
-			)
-			meta["suspicious"] = "true"
-		}
-
-		// Directedness signals for the routing layer.
-		// bot_mentioned: message explicitly @-mentions this bot.
-		botID := s.State.User.ID
-		for _, u := range m.Mentions {
-			if u.ID == botID {
-				meta["bot_mentioned"] = "true"
-				break
+			// Only process messages from configured channels.
+			if _, ok := d.channelIDs[m.ChannelID]; !ok {
+				return
 			}
-		}
-		// is_reply: message is a reply to any prior message (not just bot messages).
-		// The routing layer uses this in combination with bot_mentioned.
-		if m.MessageReference != nil && m.MessageReference.MessageID != "" {
-			meta["is_reply"] = "true"
-			// is_reply_to_bot: referenced message is one we sent (in msgChanMap or known bot ID).
-			// We only have our own outbound message IDs if we track them; for now use the
-			// simpler signal: check if the referenced message author is the bot via cache.
-			// discordgo caches recent messages in session.State — try that first.
-			if refMsg, err := s.State.Message(m.ChannelID, m.MessageReference.MessageID); err == nil {
-				if refMsg.Author != nil && refMsg.Author.ID == botID {
-					meta["is_reply_to_bot"] = "true"
+
+			// Deduplicate: Discord replays events on reconnect. Drop already-seen IDs.
+			d.mu.Lock()
+			if _, seen := d.seenMsgIDs[m.ID]; seen {
+				d.mu.Unlock()
+				slog.Debug("discord: dropping duplicate message", "id", m.ID)
+				return
+			}
+			d.seenMsgIDs[m.ID] = struct{}{}
+			d.seenMsgOrder = append(d.seenMsgOrder, m.ID)
+			for len(d.seenMsgOrder) > d.seenMsgMax {
+				delete(d.seenMsgIDs, d.seenMsgOrder[0])
+				d.seenMsgOrder = d.seenMsgOrder[1:]
+			}
+			d.mu.Unlock()
+
+			// Record messageID → channelID mapping for React, capping at msgChanMax
+			// via FIFO eviction to prevent unbounded memory growth.
+			d.mu.Lock()
+			if _, exists := d.msgChanMap[m.ID]; !exists {
+				d.msgChanMap[m.ID] = m.ChannelID
+				d.msgIDOrder = append(d.msgIDOrder, m.ID)
+				for len(d.msgIDOrder) > d.msgChanMax {
+					oldest := d.msgIDOrder[0]
+					d.msgIDOrder = d.msgIDOrder[1:]
+					delete(d.msgChanMap, oldest)
 				}
 			}
-		}
+			d.mu.Unlock()
 
-		msg := channels.InboundMessage{
-			ID:             m.ID,
-			ConversationID: ComputeConversationID(m.ChannelID, m.Author.ID),
-			ChannelID:      m.ChannelID,
-			UserID:         m.Author.ID,
-			Content:        m.Content,
-			Timestamp:      time.Now(),
-			Meta:           meta,
-		}
+			meta := map[string]any{}
 
-		// Guard against sending on a closed channel after shutdown.
-		d.mu.RLock()
-		isDone := d.done
-		d.mu.RUnlock()
-		if isDone {
-			return
-		}
+			// Prompt injection detection.
+			if checkSuspicious(m.Content) {
+				slog.Warn("discord: suspicious message detected",
+					"message_id", m.ID,
+					"channel_id", m.ChannelID,
+					"user_id", m.Author.ID,
+				)
+				meta["suspicious"] = "true"
+			}
 
-		select {
-		case msgs <- msg:
-		case <-ctx.Done():
-			return
-		}
-	})
+			// Directedness signals for the routing layer.
+			// bot_mentioned: message explicitly @-mentions this bot.
+			botID := s.State.User.ID
+			for _, u := range m.Mentions {
+				if u.ID == botID {
+					meta["bot_mentioned"] = "true"
+					break
+				}
+			}
+			// is_reply: message is a reply to any prior message (not just bot messages).
+			// The routing layer uses this in combination with bot_mentioned.
+			if m.MessageReference != nil && m.MessageReference.MessageID != "" {
+				meta["is_reply"] = "true"
+				// is_reply_to_bot: referenced message is one we sent (in msgChanMap or known bot ID).
+				// We only have our own outbound message IDs if we track them; for now use the
+				// simpler signal: check if the referenced message author is the bot via cache.
+				// discordgo caches recent messages in session.State — try that first.
+				if refMsg, err := s.State.Message(m.ChannelID, m.MessageReference.MessageID); err == nil {
+					if refMsg.Author != nil && refMsg.Author.ID == botID {
+						meta["is_reply_to_bot"] = "true"
+					}
+				}
+			}
 
-	// Track connect/disconnect events for health reporting.
-	d.session.AddHandler(func(s *discordgo.Session, e *discordgo.Connect) {
-		d.mu.Lock()
-		d.connState = channels.StateConnected
-		d.mu.Unlock()
-		slog.Info("discord: connected")
-	})
-	d.session.AddHandler(func(s *discordgo.Session, e *discordgo.Disconnect) {
-		d.mu.Lock()
-		if !d.done {
-			d.connState = channels.StateReconnecting
-		}
-		d.mu.Unlock()
-		slog.Warn("discord: disconnected; discordgo will attempt reconnect")
+			msg := channels.InboundMessage{
+				ID:             m.ID,
+				ConversationID: ComputeConversationID(m.ChannelID, m.Author.ID),
+				ChannelID:      m.ChannelID,
+				UserID:         m.Author.ID,
+				Content:        m.Content,
+				Timestamp:      time.Now(),
+				Meta:           meta,
+			}
+
+			// Guard against sending on a closed channel after shutdown.
+			d.mu.RLock()
+			isDone := d.done
+			d.mu.RUnlock()
+			if isDone {
+				return
+			}
+
+			select {
+			case msgs <- msg:
+			case <-ctx.Done():
+				return
+			}
+		})
+
+		// Track connect/disconnect events for health reporting.
+		d.session.AddHandler(func(s *discordgo.Session, e *discordgo.Connect) {
+			d.mu.Lock()
+			d.connState = channels.StateConnected
+			d.mu.Unlock()
+			slog.Info("discord: connected")
+		})
+		d.session.AddHandler(func(s *discordgo.Session, e *discordgo.Disconnect) {
+			d.mu.Lock()
+			if !d.done {
+				d.connState = channels.StateReconnecting
+			}
+			d.mu.Unlock()
+			slog.Warn("discord: disconnected; discordgo will attempt reconnect")
+		})
+
 	})
 
 	if err := d.session.Open(); err != nil {
