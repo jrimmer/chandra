@@ -108,8 +108,9 @@ func (d *Discord) ID() string { return "discord" }
 // The caller owns the msgs channel and is responsible for draining it.
 func (d *Discord) Listen(ctx context.Context, msgs chan<- channels.InboundMessage) error {
 	d.session.AddHandler(func(s *discordgo.Session, m *discordgo.MessageCreate) {
-		// Ignore messages sent by the bot itself.
-		if m.Author == nil || m.Author.ID == s.State.User.ID {
+		// Ignore messages from the bot itself or any other bot.
+		// Bots should not be responding to each other in a loop.
+		if m.Author == nil || m.Author.ID == s.State.User.ID || m.Author.Bot {
 			return
 		}
 
