@@ -463,6 +463,13 @@ func run(ctx context.Context, safeMode bool) error {
 		if dcErr == nil && cfg.Channels.Discord.AllowBots {
 			dc.SetAllowBots(true)
 		}
+		if dcErr == nil {
+			// Progressive delivery feature flags.
+			// reaction_status defaults to true (nil = on); edit_in_place defaults to false.
+			reactionOn := cfg.Channels.Discord.ReactionStatus == nil || *cfg.Channels.Discord.ReactionStatus
+			dc.SetReactionStatus(reactionOn)
+			dc.SetEditInPlace(cfg.Channels.Discord.EditInPlace)
+		}
 		if dcErr != nil {
 			return fmt.Errorf("chandrad: discord init: %w", dcErr)
 		}
@@ -642,16 +649,28 @@ func run(ctx context.Context, safeMode bool) error {
 			convQueues[convID] = q
 			go func() {
 				for cm := range q {
-					// PD3: send placeholder immediately so the user sees a response
-					// token while the agent works; we'll edit it with the real content.
-					placeholderID, phErr := discordDC.Send(ctx, channels.OutboundMessage{
-						ChannelID: cm.msg.ChannelID,
-						Content:   "…",
-						ReplyToID: cm.msg.ID,
-					})
-					if phErr != nil {
-						slog.Warn("chandrad: placeholder send failed", "err", phErr)
-						placeholderID = ""
+					// PD3: send placeholder immediately (when edit_in_place enabled)
+					// so the user sees a response token while the agent works.
+					var placeholderID string
+					if cfg.Channels.Discord != nil && cfg.Channels.Discord.EditInPlace {
+						var phErr error
+						placeholderID, phErr = discordDC.Send(ctx, channels.OutboundMessage{
+							ChannelID: cm.msg.ChannelID,
+							Content:   "…",
+							ReplyToID: cm.msg.ID,
+						})
+						if phErr != nil {
+							slog.Warn("chandrad: placeholder send failed", "err", phErr)
+							placeholderID = ""
+						} else if du, ok2 := discordChannel.(channels.DeliveryUpdater); ok2 {
+							// Pass placeholder ID to Discord adapter for status text updates.
+							du.OnDeliveryEvent(channels.DeliveryEvent{
+								Kind:         channels.DeliveryEditTarget,
+								MessageID:    cm.msg.ID,
+								ChannelID:    cm.msg.ChannelID,
+								EditTargetID: placeholderID,
+							})
+						}
 					}
 
 					callCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)

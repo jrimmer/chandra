@@ -68,7 +68,9 @@ type Discord struct {
 	// would register duplicate handlers and cause every message to be processed twice.
 	handlerOnce sync.Once
 
-	allowBots bool // if true, messages from other bots are accepted (testing only)
+	allowBots       bool // if true, messages from other bots are accepted (testing only)
+	reactionStatus  bool // show emoji reactions during processing (default true)
+	editInPlace     bool // send placeholder then edit with response (default false)
 
 	// seenMsgIDs deduplicates inbound messages against Discord replay on reconnect.
 	seenMsgIDs   map[string]struct{}
@@ -77,7 +79,8 @@ type Discord struct {
 
 	// delivery tracks active StatusReactionController + TypingHeartbeat per
 	// inbound message ID. Cleaned up automatically when the turn completes.
-	delivery sync.Map // map[messageID]*deliveryTracker
+	delivery    sync.Map // map[messageID]*deliveryTracker
+	editTargets sync.Map // map[inboundMsgID]placeholderMsgID for edit-in-place
 }
 
 // deliveryTracker holds the active reaction controller and typing heartbeat
@@ -376,53 +379,120 @@ func (d *Discord) React(ctx context.Context, messageID, emoji string) error {
 // OnDeliveryEvent implements channels.DeliveryUpdater. It is called by the
 // agent loop on each pipeline status change and must return immediately.
 //
-// On DeliveryReceived a new StatusReactionController and TypingHeartbeat are
-// created for the message. Subsequent events drive the reaction state machine.
-// On DeliveryDone or DeliveryError the tracker is cleaned up.
+// Reactions (if reactionStatus=true): 👀 received, 🤔 thinking, tool emojis.
+// Done/Error reactions are intentionally omitted — final state is the message.
+// Edit-in-place (if editInPlace=true): placeholder text tracks agent state.
 func (d *Discord) OnDeliveryEvent(evt channels.DeliveryEvent) {
 	switch evt.Kind {
 	case channels.DeliveryReceived:
-		// Create tracker if the message ID is present.
 		if evt.MessageID == "" {
 			return
 		}
-		rc := NewStatusReactionController(d.session, evt.ChannelID, evt.MessageID, nil, nil)
 		th := NewTypingHeartbeat(d.session, evt.ChannelID)
-		tracker := &deliveryTracker{reaction: rc, typing: th}
-		d.delivery.Store(evt.MessageID, tracker)
-		rc.SetQueued()
+		var rc *StatusReactionController
+		if d.reactionStatus {
+			rc = NewStatusReactionController(d.session, evt.ChannelID, evt.MessageID, nil, nil)
+			rc.SetQueued()
+		}
+		d.delivery.Store(evt.MessageID, &deliveryTracker{reaction: rc, typing: th})
+
+	case channels.DeliveryEditTarget:
+		// Store the placeholder message ID so subsequent events can edit it.
+		if d.editInPlace && evt.MessageID != "" && evt.EditTargetID != "" {
+			d.editTargets.Store(evt.MessageID, evt.EditTargetID)
+		}
 
 	case channels.DeliveryThinking:
 		if t, ok := d.delivery.Load(evt.MessageID); ok {
-			t.(*deliveryTracker).reaction.SetThinking()
+			tr := t.(*deliveryTracker)
+			if d.reactionStatus && tr.reaction != nil {
+				tr.reaction.SetThinking()
+			}
+		}
+		if d.editInPlace {
+			d.editPlaceholder(evt.MessageID, evt.ChannelID, "Thinking\u2026")
 		}
 
 	case channels.DeliveryToolStart:
 		if t, ok := d.delivery.Load(evt.MessageID); ok {
-			t.(*deliveryTracker).reaction.SetTool(evt.ToolName)
+			tr := t.(*deliveryTracker)
+			if d.reactionStatus && tr.reaction != nil {
+				tr.reaction.SetTool(evt.ToolName)
+			}
+		}
+		if d.editInPlace {
+			d.editPlaceholder(evt.MessageID, evt.ChannelID, resolveToolStatusText(evt.ToolName))
 		}
 
 	case channels.DeliveryToolEnd:
-		// No state change on ToolEnd — controller stays in the tool emoji
-		// until the next ToolStart or Done/Error. Stall timers reset automatically
-		// on the next scheduleEmoji call.
+		// Reactions: stay on tool emoji until next event.
+		// Edit-in-place: return to Thinking… after tool result.
+		if d.editInPlace {
+			d.editPlaceholder(evt.MessageID, evt.ChannelID, "Thinking\u2026")
+		}
 
-	case channels.DeliveryDone:
+	case channels.DeliveryDone, channels.DeliveryError:
+		// No Done(👍) or Error(😱) reactions — final state is the response text.
+		// Just clean up the tracker and remove any in-progress reaction.
 		if t, ok := d.delivery.LoadAndDelete(evt.MessageID); ok {
 			tr := t.(*deliveryTracker)
 			tr.typing.Stop()
-			tr.reaction.SetDone()
+			if tr.reaction != nil {
+				tr.reaction.Finish()
+			}
 		}
+		d.editTargets.Delete(evt.MessageID)
+	}
+}
 
-	case channels.DeliveryError:
-		if t, ok := d.delivery.LoadAndDelete(evt.MessageID); ok {
-			tr := t.(*deliveryTracker)
-			tr.typing.Stop()
-			tr.reaction.SetError()
-		}
+// editPlaceholder edits the placeholder message for the given inbound message ID.
+// Non-blocking: called from OnDeliveryEvent which must return immediately.
+func (d *Discord) editPlaceholder(inboundMsgID, channelID, text string) {
+	if v, ok := d.editTargets.Load(inboundMsgID); ok {
+		placeholderID := v.(string)
+		go func() {
+			if _, err := d.session.ChannelMessageEdit(channelID, placeholderID, text); err != nil {
+				slog.Debug("discord: edit placeholder failed", "err", err)
+			}
+		}()
+	}
+}
+
+// resolveToolStatusText returns a human-readable status string for the given tool.
+func resolveToolStatusText(toolName string) string {
+	lower := strings.ToLower(strings.TrimSpace(toolName))
+	switch {
+	case strings.Contains(lower, "exec") || strings.Contains(lower, "bash") || strings.Contains(lower, "shell"):
+		return "Running `exec`\u2026"
+	case strings.Contains(lower, "read_file") || lower == "read":
+		return "Reading file\u2026"
+	case strings.Contains(lower, "write_file") || lower == "write":
+		return "Writing file\u2026"
+	case strings.Contains(lower, "web_search") || strings.Contains(lower, "search"):
+		return "Searching the web\u2026"
+	case strings.Contains(lower, "fetch") || strings.Contains(lower, "browse"):
+		return "Fetching URL\u2026"
+	case lower == "note_context":
+		return "Reviewing notes\u2026"
+	case lower == "list_intents":
+		return "Checking schedule\u2026"
+	case lower == "schedule_reminder":
+		return "Setting reminder\u2026"
+	case lower == "get_current_time":
+		return "Checking time\u2026"
+	case lower == "read_skill" || lower == "write_skill":
+		return "Working on skill\u2026"
+	default:
+		return "Using `" + toolName + "`\u2026"
 	}
 }
 
 // SetAllowBots configures whether messages from other bot accounts are accepted.
 // Only use during testing to allow test harness bots to send prompts.
 func (d *Discord) SetAllowBots(v bool) { d.allowBots = v }
+
+// SetReactionStatus enables or disables emoji status reactions during processing.
+func (d *Discord) SetReactionStatus(v bool) { d.reactionStatus = v }
+
+// SetEditInPlace enables or disables the edit-in-place delivery mode.
+func (d *Discord) SetEditInPlace(v bool) { d.editInPlace = v }

@@ -160,6 +160,45 @@ func (c *StatusReactionController) SetError() {
 	c.finishWithEmoji(c.emojis.Error, time.Duration(c.timing.ErrorHoldMs)*time.Millisecond)
 }
 
+// Finish tears down the controller cleanly — removes the current reaction
+// without adding a Done/Error emoji. Called when edit-in-place handles the
+// final delivery state and no terminal reaction is desired.
+func (c *StatusReactionController) Finish() {
+	c.mu.Lock()
+	if c.finished {
+		c.mu.Unlock()
+		return
+	}
+	c.finished = true
+	if c.debounce != nil {
+		c.debounce.Stop()
+		c.debounce = nil
+	}
+	c.clearStallTimersLocked()
+	prev := c.current
+	c.current = ""
+	c.mu.Unlock()
+
+	// Remove current reaction (if any), then close.
+	if prev != "" {
+		c.ops <- func() {
+			_ = c.session.MessageReactionRemove(c.channelID, c.messageID, prev, "@me")
+		}
+	}
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		close(c.ops)
+	}()
+}
+
+// Finish tears down the controller cleanly — removes the current reaction
+// without adding a Done/Error emoji. Called when edit-in-place handles the
+// final delivery state and no terminal reaction is desired.
+
+// Finish tears down the controller cleanly — removes the current reaction
+// without adding a Done/Error emoji. Called when edit-in-place handles the
+// final delivery state and no terminal reaction is desired.
+
 // scheduleEmoji queues an emoji transition. If immediate is false, the
 // transition is debounced by timing.DebounceMs.
 func (c *StatusReactionController) scheduleEmoji(emoji string, immediate bool) {

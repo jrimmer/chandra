@@ -79,7 +79,9 @@ type DiscordConfig struct {
 	AllowedUsers  []string `toml:"allowed_users"`
 	AllowedGuilds []string `toml:"allowed_guilds"`
 	AllowedRoles  []string `toml:"allowed_roles"`
-	AllowBots     bool     `toml:"allow_bots"` // allow messages from other bots (testing only)
+	AllowBots       bool     `toml:"allow_bots"`       // allow messages from other bots (testing only)
+	ReactionStatus  *bool `toml:"reaction_status"`  // show emoji reactions during processing (default true)
+	EditInPlace     bool     `toml:"edit_in_place"`    // send placeholder then edit with response (default false)
 }
 
 // ChannelsConfig holds all inbound channel configurations.

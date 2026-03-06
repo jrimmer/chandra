@@ -62,15 +62,17 @@ const (
 	DeliveryToolEnd    DeliveryEventKind = "tool_end"    // tool execution finished
 	DeliveryDone       DeliveryEventKind = "done"        // response sent successfully
 	DeliveryError      DeliveryEventKind = "error"       // pipeline failed
+	DeliveryEditTarget DeliveryEventKind = "edit_target" // placeholder message ID for edit-in-place
 )
 
 // DeliveryEvent carries status information from the agent pipeline to the channel adapter.
 type DeliveryEvent struct {
-	Kind      DeliveryEventKind
-	MessageID string // original inbound message ID (for reactions)
-	ChannelID string
-	Detail    string // human-readable description, e.g. "Checking weather"
-	ToolName  string // populated for DeliveryToolStart / DeliveryToolEnd
+	Kind         DeliveryEventKind
+	MessageID    string // original inbound message ID (for reactions)
+	ChannelID    string
+	Detail       string // human-readable description, e.g. "Checking weather"
+	ToolName     string // populated for DeliveryToolStart / DeliveryToolEnd
+	EditTargetID string // placeholder message ID (populated for DeliveryEditTarget)
 }
 
 // DeliveryUpdater is an optional interface that channel adapters can implement
