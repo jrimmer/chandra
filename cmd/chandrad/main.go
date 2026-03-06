@@ -567,10 +567,12 @@ func run(ctx context.Context, safeMode bool) error {
 						// "QUIET" response means the agent checked but found nothing to say.
 						isQuiet := strings.TrimSpace(resp) == "QUIET"
 						if resp != "" && !isQuiet && turn.ChannelID != "" && discordDC != nil {
+							for _, chunk := range chunkMessage(resp, 1900) {
 							_ = discordDC.Send(ctx, channels.OutboundMessage{
 								ChannelID: turn.ChannelID,
-								Content:   resp,
+								Content:   chunk,
 							})
+						}
 						}
 						// Recurring vs one-shot: if the intent has a recurrence interval,
 						// advance next_check instead of completing.
@@ -661,13 +663,20 @@ func run(ctx context.Context, safeMode bool) error {
 							"conversation", convID, "err", runErr)
 						continue
 					}
-					if sendErr := discordDC.Send(ctx, channels.OutboundMessage{
-						ChannelID: cm.msg.ChannelID,
-						Content:   resp,
-						ReplyToID: cm.msg.ID,
-					}); sendErr != nil {
-						slog.Error("chandrad: discord send failed",
-							"conversation", convID, "err", sendErr)
+					for i, chunk := range chunkMessage(resp, 1900) {
+						replyTo := ""
+						if i == 0 {
+							replyTo = cm.msg.ID
+						}
+						if sendErr := discordDC.Send(ctx, channels.OutboundMessage{
+							ChannelID: cm.msg.ChannelID,
+							Content:   chunk,
+							ReplyToID: replyTo,
+						}); sendErr != nil {
+							slog.Error("chandrad: discord send failed",
+								"conversation", convID, "chunk", i, "err", sendErr)
+							break
+						}
 					}
 				}
 				convMu.Lock()
@@ -1786,4 +1795,39 @@ func registeredToolNames(reg tools.Registry) map[string]bool {
 		names[d.Name] = true
 	}
 	return names
+}
+
+// chunkMessage splits text into Discord-safe segments of at most maxLen runes,
+// splitting on newline boundaries where possible.
+func chunkMessage(text string, maxLen int) []string {
+	if len([]rune(text)) <= maxLen {
+		return []string{text}
+	}
+	var chunks []string
+	lines := strings.Split(text, "\n")
+	var buf strings.Builder
+	for _, line := range lines {
+		lineRunes := []rune(line + "\n")
+		if buf.Len() > 0 && len([]rune(buf.String()))+len(lineRunes) > maxLen {
+			chunks = append(chunks, strings.TrimRight(buf.String(), "\n"))
+			buf.Reset()
+		}
+		if len(lineRunes) > maxLen {
+			// Line itself is too long — hard split.
+			r := []rune(line)
+			for i := 0; i < len(r); i += maxLen {
+				end := i + maxLen
+				if end > len(r) {
+					end = len(r)
+				}
+				chunks = append(chunks, string(r[i:end]))
+			}
+		} else {
+			buf.WriteString(line + "\n")
+		}
+	}
+	if buf.Len() > 0 {
+		chunks = append(chunks, strings.TrimRight(buf.String(), "\n"))
+	}
+	return chunks
 }
