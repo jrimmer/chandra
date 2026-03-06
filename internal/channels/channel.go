@@ -50,6 +50,37 @@ func (s ConnectionState) String() string {
 	}
 }
 
+// ─── Progressive delivery ────────────────────────────────────────────────────
+
+// DeliveryEventKind identifies the phase of the agent pipeline.
+type DeliveryEventKind string
+
+const (
+	DeliveryReceived   DeliveryEventKind = "received"    // message entered pipeline
+	DeliveryThinking   DeliveryEventKind = "thinking"    // LLM call starting
+	DeliveryToolStart  DeliveryEventKind = "tool_start"  // tool execution beginning
+	DeliveryToolEnd    DeliveryEventKind = "tool_end"    // tool execution finished
+	DeliveryDone       DeliveryEventKind = "done"        // response sent successfully
+	DeliveryError      DeliveryEventKind = "error"       // pipeline failed
+)
+
+// DeliveryEvent carries status information from the agent pipeline to the channel adapter.
+type DeliveryEvent struct {
+	Kind      DeliveryEventKind
+	MessageID string // original inbound message ID (for reactions)
+	ChannelID string
+	Detail    string // human-readable description, e.g. "Checking weather"
+	ToolName  string // populated for DeliveryToolStart / DeliveryToolEnd
+}
+
+// DeliveryUpdater is an optional interface that channel adapters can implement
+// to receive real-time pipeline status events. Calls must be non-blocking.
+type DeliveryUpdater interface {
+	OnDeliveryEvent(evt DeliveryEvent)
+}
+
+// ─── Channel interface ────────────────────────────────────────────────────────
+
 // Channel is the interface that all messaging platform adapters must implement.
 type Channel interface {
 	ID() string

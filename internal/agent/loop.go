@@ -106,8 +106,23 @@ func NewLoop(cfg LoopConfig) AgentLoop {
 	return &agentLoop{cfg: cfg}
 }
 
+// emitDelivery fires a DeliveryEvent on the channel if it implements DeliveryUpdater.
+// It is a no-op if the channel does not implement the interface.
+func (l *agentLoop) emitDelivery(evt channels.DeliveryEvent) {
+	if du, ok := l.cfg.Channel.(channels.DeliveryUpdater); ok {
+		du.OnDeliveryEvent(evt)
+	}
+}
+
 // Run implements AgentLoop.Run: the 9-step think-act-remember cycle.
 func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.InboundMessage) (string, error) {
+	// Emit DeliveryReceived immediately so the channel can show a 👀 reaction.
+	l.emitDelivery(channels.DeliveryEvent{
+		Kind:      channels.DeliveryReceived,
+		MessageID: msg.ID,
+		ChannelID: msg.ChannelID,
+	})
+
 	// Step 1: Load recent episodes and identity context.
 	// Use RecentAcrossSessions so episodic memory survives daemon restarts
 	// and session boundary transitions (session IDs change on each restart
@@ -173,6 +188,12 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 	chainTrace := []string{}
 
 	for round := 0; round < l.cfg.MaxRounds; round++ {
+		// Emit Thinking before each LLM call (round 0 = initial thinking, subsequent rounds = continued reasoning).
+		l.emitDelivery(channels.DeliveryEvent{
+			Kind:      channels.DeliveryThinking,
+			MessageID: msg.ID,
+			ChannelID: msg.ChannelID,
+		})
 		resp, err := l.cfg.Provider.Complete(ctx, provider.CompletionRequest{
 			Messages: messages,
 			Tools:    window.Tools,
@@ -182,6 +203,12 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 				Type:      actionlog.ActionError,
 				SessionID: session.ID,
 				Summary:   err.Error(),
+			})
+			l.emitDelivery(channels.DeliveryEvent{
+				Kind:      channels.DeliveryError,
+				MessageID: msg.ID,
+				ChannelID: msg.ChannelID,
+				Detail:    err.Error(),
 			})
 			return "", fmt.Errorf("agent/loop: provider.Complete: %w", err)
 		}
@@ -204,7 +231,22 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 
 		// Execute safe tool calls in parallel and append results.
 		if len(safeToolCalls) > 0 {
+			// Emit ToolStart for the first tool in the batch (representative).
+			if len(safeToolCalls) > 0 {
+				l.emitDelivery(channels.DeliveryEvent{
+					Kind:      channels.DeliveryToolStart,
+					MessageID: msg.ID,
+					ChannelID: msg.ChannelID,
+					ToolName:  safeToolCalls[0].Name,
+				})
+			}
 			results := l.cfg.Executor.Execute(ctx, safeToolCalls)
+			// Emit ToolEnd after all tools in this round complete.
+			l.emitDelivery(channels.DeliveryEvent{
+				Kind:      channels.DeliveryToolEnd,
+				MessageID: msg.ID,
+				ChannelID: msg.ChannelID,
+			})
 			for i, result := range results {
 				toolName := safeToolCalls[i].Name
 				chainTrace = append(chainTrace, toolName)
@@ -266,6 +308,13 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 	ppChannelID   := session.ChannelID
 	ppUserID      := session.UserID
 	ppNow         := time.Now().UTC()
+
+	// Emit Done now — the response has been assembled and will be sent by the caller.
+	l.emitDelivery(channels.DeliveryEvent{
+		Kind:      channels.DeliveryDone,
+		MessageID: msg.ID,
+		ChannelID: msg.ChannelID,
+	})
 
 	l.ppWg.Add(1)
 	go func() {

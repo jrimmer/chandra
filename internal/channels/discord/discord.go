@@ -17,8 +17,9 @@ import (
 	"github.com/jrimmer/chandra/internal/channels"
 )
 
-// Compile-time assertion that *Discord satisfies channels.Channel.
-var _ channels.Channel = (*Discord)(nil)
+// Compile-time assertions.
+var _ channels.Channel         = (*Discord)(nil)
+var _ channels.DeliveryUpdater = (*Discord)(nil)
 
 // suspiciousPatterns contains substrings that indicate a potential prompt
 // injection attempt. All comparisons are done case-insensitively.
@@ -71,6 +72,17 @@ type Discord struct {
 	seenMsgIDs   map[string]struct{}
 	seenMsgOrder []string
 	seenMsgMax   int
+
+	// delivery tracks active StatusReactionController + TypingHeartbeat per
+	// inbound message ID. Cleaned up automatically when the turn completes.
+	delivery sync.Map // map[messageID]*deliveryTracker
+}
+
+// deliveryTracker holds the active reaction controller and typing heartbeat
+// for a single in-flight agent turn.
+type deliveryTracker struct {
+	reaction *StatusReactionController
+	typing   *TypingHeartbeat
 }
 
 // NewDiscord constructs a Discord adapter with the given bot token and the list
@@ -340,4 +352,54 @@ func (d *Discord) React(ctx context.Context, messageID, emoji string) error {
 		return fmt.Errorf("discord: react: %w", err)
 	}
 	return nil
+}
+
+// OnDeliveryEvent implements channels.DeliveryUpdater. It is called by the
+// agent loop on each pipeline status change and must return immediately.
+//
+// On DeliveryReceived a new StatusReactionController and TypingHeartbeat are
+// created for the message. Subsequent events drive the reaction state machine.
+// On DeliveryDone or DeliveryError the tracker is cleaned up.
+func (d *Discord) OnDeliveryEvent(evt channels.DeliveryEvent) {
+	switch evt.Kind {
+	case channels.DeliveryReceived:
+		// Create tracker if the message ID is present.
+		if evt.MessageID == "" {
+			return
+		}
+		rc := NewStatusReactionController(d.session, evt.ChannelID, evt.MessageID, nil, nil)
+		th := NewTypingHeartbeat(d.session, evt.ChannelID)
+		tracker := &deliveryTracker{reaction: rc, typing: th}
+		d.delivery.Store(evt.MessageID, tracker)
+		rc.SetQueued()
+
+	case channels.DeliveryThinking:
+		if t, ok := d.delivery.Load(evt.MessageID); ok {
+			t.(*deliveryTracker).reaction.SetThinking()
+		}
+
+	case channels.DeliveryToolStart:
+		if t, ok := d.delivery.Load(evt.MessageID); ok {
+			t.(*deliveryTracker).reaction.SetTool(evt.ToolName)
+		}
+
+	case channels.DeliveryToolEnd:
+		// No state change on ToolEnd — controller stays in the tool emoji
+		// until the next ToolStart or Done/Error. Stall timers reset automatically
+		// on the next scheduleEmoji call.
+
+	case channels.DeliveryDone:
+		if t, ok := d.delivery.LoadAndDelete(evt.MessageID); ok {
+			tr := t.(*deliveryTracker)
+			tr.typing.Stop()
+			tr.reaction.SetDone()
+		}
+
+	case channels.DeliveryError:
+		if t, ok := d.delivery.LoadAndDelete(evt.MessageID); ok {
+			tr := t.(*deliveryTracker)
+			tr.typing.Stop()
+			tr.reaction.SetError()
+		}
+	}
 }

@@ -78,6 +78,15 @@ func (s *ChannelSupervisor) ConnectionState() ConnectionState {
 	return s.inner.ConnectionState()
 }
 
+// OnDeliveryEvent implements DeliveryUpdater by delegating to the inner channel
+// if it supports the interface. This allows the supervisor to be passed wherever
+// a DeliveryUpdater is expected without unwrapping the inner channel.
+func (s *ChannelSupervisor) OnDeliveryEvent(evt DeliveryEvent) {
+	if du, ok := s.inner.(DeliveryUpdater); ok {
+		du.OnDeliveryEvent(evt)
+	}
+}
+
 // Listen starts the inner channel's Listen loop and restarts it with
 // exponential backoff if it exits with a non-context error.
 //
