@@ -854,6 +854,14 @@ func run(ctx context.Context, safeMode bool) error {
 	//                   Event-intent handler, Scheduler, MQTT bridge, Event bus.
 	// DB is closed via defer st.Close().
 	// -------------------------------------------------------------------
+	// Drain in-flight post-processing goroutines before tearing down DB/memory.
+	// This ensures episodic + semantic memory writes from the last turns
+	// complete before the process exits — preventing context loss on restart.
+	if agentLoop != nil {
+		slog.Info("chandrad: draining post-processing goroutines...")
+		agentLoop.DrainPostProcess(10 * time.Second)
+	}
+
 	apiServer.Stop()
 	slog.Info("chandrad: API server stopped")
 

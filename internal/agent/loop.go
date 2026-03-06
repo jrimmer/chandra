@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jrimmer/chandra/internal/actionlog"
@@ -80,6 +81,11 @@ type AgentLoop interface {
 	// RunScheduled processes a proactive turn injected by the Scheduler.
 	// Returns nil immediately (with a WARN log) when the internal queue is full.
 	RunScheduled(ctx context.Context, turn scheduler.ScheduledTurn) (string, error)
+
+	// DrainPostProcess waits for all in-flight background post-processing
+	// goroutines to complete, up to the given timeout. Call during graceful
+	// shutdown to ensure episodic and semantic memory writes finish before exit.
+	DrainPostProcess(timeout time.Duration)
 }
 
 // Compile-time assertion.
@@ -87,7 +93,8 @@ var _ AgentLoop = (*agentLoop)(nil)
 
 // agentLoop implements AgentLoop.
 type agentLoop struct {
-	cfg LoopConfig
+	cfg  LoopConfig
+	ppWg sync.WaitGroup // tracks in-flight post-processing goroutines
 }
 
 // NewLoop constructs an AgentLoop with the provided configuration.
@@ -260,7 +267,9 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 	ppUserID      := session.UserID
 	ppNow         := time.Now().UTC()
 
+	l.ppWg.Add(1)
 	go func() {
+		defer l.ppWg.Done()
 		ppCtx, cancel := context.WithTimeout(context.Background(), ppTimeout)
 		defer cancel()
 		if done := l.cfg.PostProcessDone; done != nil {
@@ -499,6 +508,23 @@ func filterTools(all []pkg.ToolDef, allowed []string) []pkg.ToolDef {
 // word_count * 4/3.
 func estimateTokens(s string) int {
 	return len(strings.Fields(s)) * 4 / 3
+}
+
+// DrainPostProcess waits for all in-flight background post-processing goroutines
+// to complete, up to timeout. Used during graceful shutdown to ensure episodic
+// and semantic memory writes finish before the process exits.
+func (l *agentLoop) DrainPostProcess(timeout time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		l.ppWg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		slog.Info("agent/loop: post-processing drained")
+	case <-time.After(timeout):
+		slog.Warn("agent/loop: post-processing drain timed out", "timeout", timeout)
+	}
 }
 
 // buildIdentityCandidate loads the agent profile and relationship state from

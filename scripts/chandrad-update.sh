@@ -68,7 +68,7 @@ kill_daemon() {
     if pgrep -x chandrad > /dev/null 2>&1; then
         log "Stopping chandrad..."
         pkill -x chandrad 2>/dev/null || true
-        for i in $(seq 1 10); do
+        for i in $(seq 1 35); do
             sleep 1
             if ! pgrep -x chandrad > /dev/null 2>&1; then
                 log "Daemon stopped after ${i}s."
