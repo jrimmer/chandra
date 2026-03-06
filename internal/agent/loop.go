@@ -288,26 +288,34 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 		}
 	}
 
-	// Steps 7-9 run in a background goroutine so Run() returns finalResponse
-	// immediately after the LLM call, reducing user-visible latency by ~100-150ms.
-	// (The second Ollama embed call and DB writes no longer block the reply.)
-	// The goroutine uses its own context so cancellation of the request ctx does
-	// not abort in-flight memory writes.
-	//
-	// Safety: all writes are idempotent/append-only; WAL mode prevents DB corruption
-	// on partial writes. At worst a crash loses one episode — acceptable for memory.
+	ppNow := time.Now().UTC()
+
+	// Step 7: Write episodic memory SYNCHRONOUSLY before returning.
+	// This is cheap (a simple DB append) and must complete before Run() returns
+	// so that a rapid follow-up message sees the current exchange in context.
+	// Moving this async caused a race: "Yes" replied before the disk-status exchange
+	// was written, leaving Kimi with no context and causing hallucinated responses.
+	userEp := pkg.Episode{SessionID: session.ID, Role: "user", Content: msg.Content, Timestamp: ppNow, Tags: []string{}}
+	assistantEp := pkg.Episode{SessionID: session.ID, Role: "assistant", Content: finalResponse, Timestamp: ppNow, Tags: []string{}}
+	if err := l.cfg.Memory.Episodic().Append(ctx, userEp); err != nil {
+		slog.Warn("agent/loop: failed to append user episode", "error", err)
+	}
+	if err := l.cfg.Memory.Episodic().Append(ctx, assistantEp); err != nil {
+		slog.Warn("agent/loop: failed to append assistant episode", "error", err)
+	}
+
+	// Steps 8-9 run in a background goroutine: the Ollama embedding call is
+	// the expensive part (~100-150ms) and does not need to block the reply.
 	ppTimeout := l.cfg.PostProcessTimeout
 	if ppTimeout <= 0 {
 		ppTimeout = 30 * time.Second
 	}
-	// Snapshot all values before returning — avoids data races with caller.
+	// Snapshot values used in the goroutine to avoid data races with caller.
 	ppUserContent := msg.Content
 	ppLLMResponse := llmResponse
-	ppFinalResp   := finalResponse
 	ppSessionID   := session.ID
 	ppChannelID   := session.ChannelID
 	ppUserID      := session.UserID
-	ppNow         := time.Now().UTC()
 
 	l.ppWg.Add(1)
 	go func() {
@@ -318,17 +326,7 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 			defer done()
 		}
 
-		// Step 7: Append exchange to EpisodicStore.
-		userEp := pkg.Episode{SessionID: ppSessionID, Role: "user", Content: ppUserContent, Timestamp: ppNow, Tags: []string{}}
-		assistantEp := pkg.Episode{SessionID: ppSessionID, Role: "assistant", Content: ppFinalResp, Timestamp: ppNow, Tags: []string{}}
-		if err := l.cfg.Memory.Episodic().Append(ppCtx, userEp); err != nil {
-			slog.Warn("agent/loop: post-process: failed to append user episode", "error", err)
-		}
-		if err := l.cfg.Memory.Episodic().Append(ppCtx, assistantEp); err != nil {
-			slog.Warn("agent/loop: post-process: failed to append assistant episode", "error", err)
-		}
-
-		// Step 8: Conditional semantic storage.
+		// Step 8: Conditional semantic storage (Ollama embed — expensive, async).
 		l.maybeSemanticallyStore(ppCtx, ppUserContent, ppLLMResponse, ppSessionID, ppUserID)
 
 		// Step 9a: Update relationship LastInteraction.
