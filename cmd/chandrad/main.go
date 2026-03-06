@@ -460,6 +460,9 @@ func run(ctx context.Context, safeMode bool) error {
 	if discordConfigured {
 		slog.Info("chandrad: starting Discord channel listener")
 		dc, dcErr := discord.NewDiscord(cfg.Channels.Discord.BotToken, cfg.Channels.Discord.ChannelIDs)
+		if dcErr == nil && cfg.Channels.Discord.AllowBots {
+			dc.SetAllowBots(true)
+		}
 		if dcErr != nil {
 			return fmt.Errorf("chandrad: discord init: %w", dcErr)
 		}

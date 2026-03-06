@@ -79,6 +79,7 @@ type DiscordConfig struct {
 	AllowedUsers  []string `toml:"allowed_users"`
 	AllowedGuilds []string `toml:"allowed_guilds"`
 	AllowedRoles  []string `toml:"allowed_roles"`
+	AllowBots     bool     `toml:"allow_bots"` // allow messages from other bots (testing only)
 }
 
 // ChannelsConfig holds all inbound channel configurations.

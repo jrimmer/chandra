@@ -68,6 +68,8 @@ type Discord struct {
 	// would register duplicate handlers and cause every message to be processed twice.
 	handlerOnce sync.Once
 
+	allowBots bool // if true, messages from other bots are accepted (testing only)
+
 	// seenMsgIDs deduplicates inbound messages against Discord replay on reconnect.
 	seenMsgIDs   map[string]struct{}
 	seenMsgOrder []string
@@ -136,7 +138,7 @@ func (d *Discord) Listen(ctx context.Context, msgs chan<- channels.InboundMessag
 	d.session.AddHandler(func(s *discordgo.Session, m *discordgo.MessageCreate) {
 			// Ignore messages from the bot itself or any other bot.
 			// Bots should not be responding to each other in a loop.
-			if m.Author == nil || m.Author.ID == s.State.User.ID || m.Author.Bot {
+			if m.Author == nil || m.Author.ID == s.State.User.ID || (m.Author.Bot && !d.allowBots) {
 				return
 			}
 
@@ -403,3 +405,7 @@ func (d *Discord) OnDeliveryEvent(evt channels.DeliveryEvent) {
 		}
 	}
 }
+
+// SetAllowBots configures whether messages from other bot accounts are accepted.
+// Only use during testing to allow test harness bots to send prompts.
+func (d *Discord) SetAllowBots(v bool) { d.allowBots = v }
