@@ -403,7 +403,33 @@ func (l *agentLoop) RunScheduled(ctx context.Context, turn scheduler.ScheduledTu
 		Meta:           map[string]any{"intent_id": turn.IntentID, "scheduled": true},
 	}
 
-	return l.Run(ctx, sess, msg)
+	resp, err := l.Run(ctx, sess, msg)
+	if err != nil {
+		return "", err
+	}
+	// For scheduled/proactive turns, "ran out of steps" and similar internal
+	// error messages should never be delivered to the user channel.
+	// Treat them as QUIET so the scheduler doesn't spam on transient failures.
+	if isScheduledErrorResponse(resp) {
+		slog.Warn("agent/loop: RunScheduled: suppressing error response as QUIET",
+			"intent_id", turn.IntentID, "resp_prefix", resp[:min(60, len(resp))])
+		return "QUIET", nil
+	}
+	return resp, nil
+}
+
+// isScheduledErrorResponse returns true for responses that are internal
+// agent errors and should be suppressed for scheduled (proactive) turns.
+func isScheduledErrorResponse(resp string) bool {
+	return strings.HasPrefix(resp, "I ran out of steps") ||
+		strings.HasPrefix(resp, "I wasn't able to get started")
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 
