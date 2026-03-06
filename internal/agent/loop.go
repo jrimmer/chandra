@@ -227,11 +227,16 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 	// If we exhausted MaxRounds without a final text response, return graceful message.
 	// llmResponse remains empty to signal a tool-call-only turn for semantic storage.
 	if finalResponse == "" {
+		chain := strings.Join(chainTrace, " → ")
 		slog.Warn("agent/loop: max tool rounds exceeded",
 			"session_id", session.ID,
-			"chain", strings.Join(chainTrace, " -> "),
+			"chain", chain,
 		)
-		finalResponse = "I wasn't able to complete that, please try again."
+		if chain != "" {
+			finalResponse = fmt.Sprintf("I ran out of steps working on that (ran: %s). Try breaking the request into smaller pieces, or ask me to focus on one thing at a time.", chain)
+		} else {
+			finalResponse = "I wasn't able to get started on that. Could you rephrase or give me a more specific task?"
+		}
 	}
 
 	// Steps 7-9 run in a background goroutine so Run() returns finalResponse
