@@ -124,6 +124,7 @@ Items are grouped by theme, each with a priority and source reference.
 |---|------|----------|--------|
 | SK2 | `chandra console` TUI — Bubble Tea terminal UI; inspect memory, sessions, skills interactively | P3 | CONSOLE.md |
 | SK4 | Skill sandboxing — directory traversal guard, prompt injection guard in SKILL.md content | P3 | TESTING.md 2.4.6–2.4.7 |
+| SK8 | **Multi-turn plan state** — hold a sequential plan across turns with interruption and resumption; plan state persisted in DB; user mid-plan questions pause not abort; resumption on next relevant message. Compelling but architecturally complex — do simpler wins first. | P3 | Chandra suggestion |
 | SK5 | Self-healing / error recovery — when a tool call fails, Chandra should suggest alternatives and retry intelligently (not just report failure) | P2 | Chandra's own suggestion |
 | SK6 | Skill marketplace / sharing — publish and install skills across Chandra instances | P4 | Chandra's own suggestion |
 
