@@ -586,6 +586,7 @@ func buildIdentityCandidate(mem memory.Memory, personaFile string) []budget.Cont
 				Role:     "system",
 				Content:  systemPrompt,
 				Priority: 1.0,
+				Recency:  time.Now(), // protect from fitFixed eviction (oldest-first drop)
 				Tokens:   estimateTokens(systemPrompt),
 			}}
 		} else {
@@ -634,6 +635,7 @@ func buildIdentityCandidate(mem memory.Memory, personaFile string) []budget.Cont
 			Role:     "system",
 			Content:  systemPrompt,
 			Priority: 1.0,
+			Recency:  time.Now(), // protect from fitFixed eviction (oldest-first drop)
 			Tokens:   estimateTokens(systemPrompt),
 		},
 	}
