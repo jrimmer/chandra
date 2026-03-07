@@ -1854,21 +1854,33 @@ func registeredToolNames(reg tools.Registry) map[string]bool {
 // chunkMessage splits text into Discord-safe segments of at most maxLen runes,
 // splitting on newline boundaries where possible.
 // isQUIETResponse returns true if the response should be suppressed.
-// Matches QUIET (case-insensitive), known model typos (QUICK), or responses
-// where the last non-empty line is one of the above.
+// Handles:
+//   - Exact QUIET / QUICK (case-insensitive)
+//   - Last non-empty line == QUIET (e.g. summary then newline then QUIET)
+//   - Last whitespace-separated token == QUIET (e.g. "No commits.    QUIET")
 func isQUIETResponse(resp string) bool {
 	isSignal := func(s string) bool {
 		upper := strings.ToUpper(strings.TrimSpace(s))
-		return upper == "QUIET" || upper == "QUICK" // QUICK is a known Kimi typo for QUIET
+		return upper == "QUIET" || upper == "QUICK" // QUICK is a known Kimi typo
 	}
 	trimmed := strings.TrimSpace(resp)
 	if isSignal(trimmed) {
 		return true
 	}
+	// Check last non-empty line.
 	lines := strings.Split(trimmed, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		if l := strings.TrimSpace(lines[i]); l != "" {
-			return isSignal(l)
+			if isSignal(l) {
+				return true
+			}
+			// Also check last whitespace-separated token on that line
+			// (catches "No new commits — d88d146 is current.    QUIET").
+			fields := strings.Fields(l)
+			if len(fields) > 0 && isSignal(fields[len(fields)-1]) {
+				return true
+			}
+			break
 		}
 	}
 	return false
