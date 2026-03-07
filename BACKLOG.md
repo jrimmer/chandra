@@ -55,6 +55,7 @@ Items are grouped by theme, each with a priority and source reference.
 |---|------|----------|--------|
 | M3 | Memory maintenance CLI — `chandra memory prune --older-than 90d`, `chandra memory stats` | P3 | PHASE2-DESIGN.md |
 | M4 | Conversation summarisation — compress old episodic entries into semantic summaries to extend effective context window | P3 | Design |
+| M5 | **User attribution in episodes** — `ALTER TABLE episodes ADD COLUMN user_id TEXT`; write path passes `session.UserID`; context assembly annotates turns as `[Username] content`. Low-effort schema change required for coherent multi-user channel support. Currently all users appear as `role: "user"` with no name. | P2 | 2026-03-07 feature comparison |
 
 ---
 
@@ -162,58 +163,44 @@ Items are grouped by theme, each with a priority and source reference.
 
 | # | Item | Priority | Source |
 |---|------|----------|--------|
-| T1 | 2.4.x skills chaos — 2.4.4, 2.4.6–2.4.11 not yet run | P1 | TESTING.md |
-| T2 | 2.5.x scheduler chaos — 2.5.3, 2.5.6–2.5.12 not yet run | P1 | TESTING.md |
-| T3 | CI pipeline — no `.github/workflows/`; all tests run manually | P2 | TESTING.md |
+| ~~T1~~ | ~~2.4.x skills chaos~~ — **DONE** 2026-03-07, all pass | done | TESTING.md |
+| ~~T2~~ | ~~2.5.x scheduler chaos~~ — **DONE** 2026-03-07, 15/15 pass; 2.5.11 gap in S3 | done | TESTING.md |
+| ~~T3~~ | ~~Loopback integration harness~~ — **DONE** `c0bad75` | done | 2026-03-07 |
+| T4 | CI pipeline — no `.github/workflows/`; all tests run manually | P2 | TESTING.md |
 
 ---
 
-*Last updated: 2026-03-06. Items added from: in-session Phase 1–3 work, context-loss bug analysis, Chandra's own backlog suggestions.*
+*Last updated: 2026-03-07. Added: M5 user attribution, T4 CI pipeline. Closed: T1 T2 T3. Added feature comparison summary.*
 
-## T3: Loopback integration test harness
-**Priority:** P2
-**Effort:** Medium (2-3 days)
+---
 
-### Components
-1.  — implements  with Go channels;  writes to ; caller injects via 
-2.  — deterministic stub LLM provider; configurable response string; records calls for assertions
-3.  — full daemon pipeline tests without Discord or network
+## Feature Comparison & v1.0 Analysis
 
-### Coverage
-- Full conv worker path (message → queue → agent loop → outbound)
-- Command interceptor wiring for all 12 ! commands
-- Access gate enforcement (allowed/denied user flows)
-- Session create/reuse lifecycle
-- Reply context injection (set ReferencedContent directly on InboundMessage)
-- Skill activation on message content triggers
-- Per-conversation state flags (!model, !verbose, !reasoning)
-- !quiet advancing heartbeat next_check
+**Document:** `FEATURE-COMPARISON.md` (2026-03-07)
+**Summary:** Gap analysis vs OpenClaw across 12 feature areas.
 
-### Out of scope
-- Discord gateway parsing (unit-tested in internal/channels/discord/)
-- Real LLM quality (eval framework)
-- Rate limits / reconnect supervisor
+**Chandra ahead:** edit-in-place delivery, hybrid BM25+vector memory, self-modification via write_skill, operator tooling, test coverage, reply threading, tool reliability telemetry.
+**OpenClaw ahead:** multi-channel support (8 channels vs 1), sub-agents and ACP harness, browser automation, bundled skill library (74 vs 8).
 
-## T3: Loopback integration test harness
-**Priority:** P2  
-**Effort:** Medium (2-3 days)
+### v1.0 blockers
 
-### Components
-- `internal/channels/loopback/loopback.go` — implements channels.Channel with Go channels; Send() writes to Outbound; caller injects via Inbound
-- `internal/provider/stub/stub.go` — deterministic stub LLM provider; configurable response; records calls for assertions
-- `tests/integration/e2e_test.go` — full daemon pipeline tests without Discord or network
+| # | Action | Effort |
+|---|--------|--------|
+| V1 | Flip `require_mention = true` (currently false from coherence testing) | 1 min |
+| V2 | Disk usage alert — chandra-test VM at 96% full; add check to heartbeat | 1 hr |
 
-### Coverage
-- Full conv worker path (message → queue → agent loop → outbound)
-- All 12 ! command wiring
-- Access gate (allowed/denied flows)
-- Session lifecycle
-- ReferencedContent reply injection
-- Skill activation on content triggers
-- Per-conversation flags (!model, !verbose, !reasoning)
-- !quiet advancing heartbeat next_check
+### Next priorities
 
-### Out of scope
-- Discord gateway parsing (unit-tested in internal/channels/discord/)
-- Real LLM quality (eval framework EV1/EV2)
-- Rate limits / reconnect supervisor
+| # | Item | Backlog ref | Priority |
+|---|------|-------------|----------|
+| 1 | User attribution in episodes | M5 | P2 |
+| 2 | CI pipeline | T4 | P2 |
+| 3 | Missed-job recovery on startup | S2 | P2 |
+| 4 | Rate limiting per user | A2 | P2 |
+| 5 | Eval framework | EV1 | P2 |
+| 6 | Readability extraction on read_url | W1 | P2 |
+| 7 | Telegram adapter | PD5 | P3 |
+
+### Explicitly out of scope
+
+Canvas, device pairing, agent-to-agent messaging, direct email, skill marketplace, macOS tools, keychain integration.
