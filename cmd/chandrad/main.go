@@ -2056,6 +2056,22 @@ func (s *skillCronSyncer) UpsertSkillCron(ctx context.Context, skillName, interv
 	return nil
 }
 
+// ListSkillCronNames returns the names of all skills with active skill_cron intents.
+// Implements the optional interface checked by pruneOrphanedCronsLocked.
+func (s *skillCronSyncer) ListSkillCronNames(ctx context.Context) ([]string, error) {
+	active, err := s.store.Active(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, in := range active {
+		if strings.HasPrefix(in.Condition, "skill_cron:") {
+			names = append(names, strings.TrimPrefix(in.Condition, "skill_cron:"))
+		}
+	}
+	return names, nil
+}
+
 func (s *skillCronSyncer) RemoveSkillCron(ctx context.Context, skillName string) error {
 	condition := "skill_cron:" + skillName
 	active, err := s.store.Active(ctx)

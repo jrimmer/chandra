@@ -119,9 +119,10 @@ func (r *Registry) Load(ctx context.Context, skillsDir string, registeredTools m
 		slog.Info("skills: loaded", "skill", skill.Name, "triggers", skill.Triggers)
 	}
 
-	// Sync cron intents for skills that declare a cron block.
+	// Sync cron intents: upsert for loaded skills, remove for deleted ones.
 	if r.cronSyncer != nil {
 		r.syncCronsLocked(ctx)
+		r.pruneOrphanedCronsLocked(ctx)
 	}
 
 	return nil
@@ -142,6 +143,32 @@ func (r *Registry) syncCronsLocked(ctx context.Context) {
 		}
 		if err := r.cronSyncer.UpsertSkillCron(ctx, name, skill.Cron.Interval, skill.Cron.Prompt, ch); err != nil {
 			slog.Warn("skills: failed to upsert cron intent", "skill", name, "err", err)
+		}
+	}
+}
+
+// pruneOrphanedCronsLocked removes skill_cron intents for skills that are no longer loaded.
+// Must be called with r.mu held (Lock, not RLock).
+func (r *Registry) pruneOrphanedCronsLocked(ctx context.Context) {
+	// Ask the syncer for all registered skill_cron intents, then remove any
+	// whose skill is not in the current loaded set.
+	// We use the CronSyncer.RemoveSkillCron for skills no longer present.
+	if lister, ok := r.cronSyncer.(interface {
+		ListSkillCronNames(ctx context.Context) ([]string, error)
+	}); ok {
+		names, err := lister.ListSkillCronNames(ctx)
+		if err != nil {
+			slog.Warn("skills: list skill cron names failed", "err", err)
+			return
+		}
+		for _, name := range names {
+			if _, loaded := r.skills[name]; !loaded {
+				if err2 := r.cronSyncer.RemoveSkillCron(ctx, name); err2 != nil {
+					slog.Warn("skills: remove orphaned cron intent failed", "skill", name, "err", err2)
+				} else {
+					slog.Info("skills: removed orphaned cron intent", "skill", name)
+				}
+			}
 		}
 	}
 }
