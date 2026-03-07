@@ -107,8 +107,8 @@ func (t *listConversationsTool) Execute(ctx context.Context, call pkg.ToolCall) 
 		if err := rows.Scan(&cs.ConvID, &cs.ChannelID, &cs.Turns, &firstAt, &lastAt); err != nil {
 			continue
 		}
-		cs.FirstAt = time.Unix(firstAt, 0).UTC().Format(time.RFC3339)
-		cs.LastAt = time.Unix(lastAt, 0).UTC().Format(time.RFC3339)
+		cs.FirstAt = time.UnixMilli(firstAt).UTC().Format(time.RFC3339)
+		cs.LastAt = time.UnixMilli(lastAt).UTC().Format(time.RFC3339)
 		// Truncate conv_id for readability.
 		if len(cs.ConvID) > 16 {
 			cs.ConvID = cs.ConvID[:16] + "…"
