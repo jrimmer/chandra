@@ -5,7 +5,6 @@ category: proactive
 triggers: [heartbeat, proactive, check in, check-in]
 cron:
   interval: 30m
-  condition: gate:has_pending_work
   prompt: "Run your heartbeat check. Review ongoing_context and recent memory. If something warrants reaching out — a follow-up, a pending commitment, something you noticed — say it concisely. If nothing warrants a message, respond with exactly: QUIET"
   channel: default
 ---
