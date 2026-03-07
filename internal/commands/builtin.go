@@ -154,8 +154,10 @@ func handleStatus(env *Env) HandlerFunc {
 
 		// Version from build info.
 		version := "unknown"
+		model := "unknown"
 		if env.Config != nil {
 			version = "v1" // matches const in main.go; extend later via build flags
+			model = env.Config.Provider.DefaultModel
 		}
 
 		return Result{Content: fmt.Sprintf(
@@ -165,8 +167,7 @@ func handleStatus(env *Env) HandlerFunc {
 				"Active sessions: `%d`\n"+
 				"Tokens today: `%d` in / `%d` out\n"+
 				"Model: `%s`",
-			version, uptime, active, todayPrompt, todayCompl,
-			env.Config.Provider.DefaultModel,
+			version, uptime, active, todayPrompt, todayCompl, model,
 		)}
 	}
 }
@@ -375,7 +376,10 @@ func handleModel(env *Env) HandlerFunc {
 	return func(ctx context.Context, cmd Command, env *Env) Result {
 		f := readFlags(env.DB, cmd.SessionID)
 		if cmd.Args == "" {
-			current := env.Config.Provider.DefaultModel
+			current := "unknown"
+			if env.Config != nil {
+				current = env.Config.Provider.DefaultModel
+			}
 			if f.ModelOverride != "" {
 				current = f.ModelOverride + " (override)"
 			}
