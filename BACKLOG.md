@@ -169,3 +169,51 @@ Items are grouped by theme, each with a priority and source reference.
 ---
 
 *Last updated: 2026-03-06. Items added from: in-session Phase 1–3 work, context-loss bug analysis, Chandra's own backlog suggestions.*
+
+## T3: Loopback integration test harness
+**Priority:** P2
+**Effort:** Medium (2-3 days)
+
+### Components
+1.  — implements  with Go channels;  writes to ; caller injects via 
+2.  — deterministic stub LLM provider; configurable response string; records calls for assertions
+3.  — full daemon pipeline tests without Discord or network
+
+### Coverage
+- Full conv worker path (message → queue → agent loop → outbound)
+- Command interceptor wiring for all 12 ! commands
+- Access gate enforcement (allowed/denied user flows)
+- Session create/reuse lifecycle
+- Reply context injection (set ReferencedContent directly on InboundMessage)
+- Skill activation on message content triggers
+- Per-conversation state flags (!model, !verbose, !reasoning)
+- !quiet advancing heartbeat next_check
+
+### Out of scope
+- Discord gateway parsing (unit-tested in internal/channels/discord/)
+- Real LLM quality (eval framework)
+- Rate limits / reconnect supervisor
+
+## T3: Loopback integration test harness
+**Priority:** P2  
+**Effort:** Medium (2-3 days)
+
+### Components
+- `internal/channels/loopback/loopback.go` — implements channels.Channel with Go channels; Send() writes to Outbound; caller injects via Inbound
+- `internal/provider/stub/stub.go` — deterministic stub LLM provider; configurable response; records calls for assertions
+- `tests/integration/e2e_test.go` — full daemon pipeline tests without Discord or network
+
+### Coverage
+- Full conv worker path (message → queue → agent loop → outbound)
+- All 12 ! command wiring
+- Access gate (allowed/denied flows)
+- Session lifecycle
+- ReferencedContent reply injection
+- Skill activation on content triggers
+- Per-conversation flags (!model, !verbose, !reasoning)
+- !quiet advancing heartbeat next_check
+
+### Out of scope
+- Discord gateway parsing (unit-tested in internal/channels/discord/)
+- Real LLM quality (eval framework EV1/EV2)
+- Rate limits / reconnect supervisor
