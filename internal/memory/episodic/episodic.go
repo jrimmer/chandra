@@ -19,6 +19,11 @@ type EpisodicStore interface {
 	// channel+user combination, spanning all sessions. Use this to retrieve
 	// episodic context that survives daemon restarts and session boundaries.
 	RecentAcrossSessions(ctx context.Context, channelID, userID string, n int) ([]pkg.Episode, error)
+	// RecentInChannel returns the n most recent episodes for a channel,
+	// across all sessions and user IDs. Unlike RecentAcrossSessions, this
+	// includes proactive (heartbeat/scheduler) episodes written under
+	// user_id="system", giving the agent a unified conversation view.
+	RecentInChannel(ctx context.Context, channelID string, n int) ([]pkg.Episode, error)
 	Since(ctx context.Context, t time.Time) ([]pkg.Episode, error)
 }
 
@@ -103,6 +108,26 @@ func (s *Store) RecentAcrossSessions(ctx context.Context, channelID, userID stri
 	}
 	defer rows.Close()
 
+	return scanEpisodes(rows)
+}
+
+// RecentInChannel returns the n most recent episodes for a channel, across all
+// sessions and user IDs. This includes proactive (heartbeat) episodes that
+// RecentAcrossSessions misses because they use user_id="system".
+func (s *Store) RecentInChannel(ctx context.Context, channelID string, n int) ([]pkg.Episode, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT e.id, e.session_id, e.role, e.content, e.timestamp, e.tags
+		 FROM episodes e
+		 JOIN sessions sess ON e.session_id = sess.id
+		 WHERE sess.channel_id = ?
+		 ORDER BY e.timestamp DESC
+		 LIMIT ?`,
+		channelID, n,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("episodic: recent_in_channel: %w", err)
+	}
+	defer rows.Close()
 	return scanEpisodes(rows)
 }
 

@@ -145,10 +145,12 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 	})
 
 	// Step 1: Load recent episodes and identity context.
-	// Use RecentAcrossSessions so episodic memory survives daemon restarts
-	// and session boundary transitions (session IDs change on each restart
-	// but channel+user identifies the conversation continuously).
-	recentEps, err := l.cfg.Memory.Episodic().RecentAcrossSessions(ctx, session.ChannelID, session.UserID, 20)
+	// Use RecentInChannel to load all recent episodes for this channel,
+	// including proactive (heartbeat/scheduler) turns written under
+	// user_id="system". RecentAcrossSessions only returned episodes from
+	// the human user's sessions, making Chandra blind to anything she
+	// said proactively when the next plain (non-reply) message arrived.
+	recentEps, err := l.cfg.Memory.Episodic().RecentInChannel(ctx, session.ChannelID, 20)
 	if err != nil {
 		slog.Warn("agent/loop: failed to load recent episodes", "session_id", session.ID, "error", err)
 	}

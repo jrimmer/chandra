@@ -24,6 +24,9 @@ func (m *mockEpisodic) Recent(_ context.Context, _ string, _ int) ([]pkg.Episode
 func (m *mockEpisodic) RecentAcrossSessions(_ context.Context, _, _ string, _ int) ([]pkg.Episode, error) {
 	return nil, nil
 }
+func (m *mockEpisodic) RecentInChannel(_ context.Context, _ string, _ int) ([]pkg.Episode, error) {
+	return nil, nil
+}
 func (m *mockEpisodic) Since(_ context.Context, _ time.Time) ([]pkg.Episode, error) {
 	return nil, nil
 }
