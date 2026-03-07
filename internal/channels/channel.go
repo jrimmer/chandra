@@ -13,9 +13,13 @@ type InboundMessage struct {
 	ConversationID string         // stable session ID: hash(channel_id + user_id), set by channel
 	ChannelID      string         // source channel (kept for routing; not in design spec)
 	UserID         string
-	Content        string
-	Timestamp      time.Time      // time the message was received
-	Meta           map[string]any // e.g., map[string]any{"suspicious": "true"}
+	Content           string
+	Timestamp         time.Time      // time the message was received
+	Meta              map[string]any // e.g., map[string]any{"suspicious": "true"}
+	// ReferencedContent is the body of the message this reply is responding to (empty if not a reply).
+	// ReferencedRole is "assistant" when the bot authored the referenced message, "user" otherwise.
+	ReferencedContent string
+	ReferencedRole    string
 }
 
 // OutboundMessage represents a message the agent wants to send to a channel.

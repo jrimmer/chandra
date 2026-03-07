@@ -202,27 +202,40 @@ func (d *Discord) Listen(ctx context.Context, msgs chan<- channels.InboundMessag
 			}
 			// is_reply: message is a reply to any prior message (not just bot messages).
 			// The routing layer uses this in combination with bot_mentioned.
+			var refContent, refRole string
 			if m.MessageReference != nil && m.MessageReference.MessageID != "" {
 				meta["is_reply"] = "true"
-				// is_reply_to_bot: referenced message is one we sent (in msgChanMap or known bot ID).
-				// We only have our own outbound message IDs if we track them; for now use the
-				// simpler signal: check if the referenced message author is the bot via cache.
-				// discordgo caches recent messages in session.State — try that first.
+				// Resolve referenced message content for reply-context injection.
+				// Try discordgo state cache first; fall back to m.ReferencedMessage (gateway-populated).
+				var refAuthorID, refBody string
 				if refMsg, err := s.State.Message(m.ChannelID, m.MessageReference.MessageID); err == nil {
-					if refMsg.Author != nil && refMsg.Author.ID == botID {
-						meta["is_reply_to_bot"] = "true"
+					refAuthorID = refMsg.Author.ID
+					refBody = refMsg.Content
+				} else if m.ReferencedMessage != nil {
+					if m.ReferencedMessage.Author != nil {
+						refAuthorID = m.ReferencedMessage.Author.ID
 					}
+					refBody = m.ReferencedMessage.Content
 				}
+				if refAuthorID == botID {
+					meta["is_reply_to_bot"] = "true"
+					refRole = "assistant"
+				} else {
+					refRole = "user"
+				}
+				refContent = refBody
 			}
 
 			msg := channels.InboundMessage{
-				ID:             m.ID,
-				ConversationID: ComputeConversationID(m.ChannelID, m.Author.ID),
-				ChannelID:      m.ChannelID,
-				UserID:         m.Author.ID,
-				Content:        m.Content,
-				Timestamp:      time.Now(),
-				Meta:           meta,
+				ID:                m.ID,
+				ConversationID:    ComputeConversationID(m.ChannelID, m.Author.ID),
+				ChannelID:         m.ChannelID,
+				UserID:            m.Author.ID,
+				Content:           m.Content,
+				Timestamp:         time.Now(),
+				Meta:              meta,
+				ReferencedContent: refContent,
+				ReferencedRole:    refRole,
 			}
 
 			// Guard against sending on a closed channel after shutdown.

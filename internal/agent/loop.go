@@ -205,6 +205,17 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 	// Build initial messages: assembled context + current user message.
 	// Copy the slice to avoid sharing the backing array with window.Messages.
 	messages := append([]provider.Message(nil), window.Messages...)
+	// When the incoming message is a reply, inject the referenced message as an explicit
+	// prior turn immediately before the user's reply. This gives the LLM unambiguous
+	// context — without it, a vague reply like "Is this still an issue?" can match
+	// the wrong episodic memory and produce a completely off-topic response.
+	if msg.ReferencedContent != "" {
+		role := msg.ReferencedRole
+		if role == "" {
+			role = "user"
+		}
+		messages = append(messages, provider.Message{Role: role, Content: msg.ReferencedContent})
+	}
 	messages = append(messages, provider.Message{Role: "user", Content: msg.Content})
 
 	// Step 5 & 6: Call provider, enter tool-call loop.
