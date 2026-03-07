@@ -19,6 +19,11 @@ func evaluateCondition(in intent.Intent) bool {
 	if strings.HasPrefix(cond, "time:") {
 		return evaluateTimeWindow(strings.TrimPrefix(cond, "time:"))
 	}
+	// gate: has_pending_work — gated at the scheduler level via GateFunc, not here.
+	// Return true so the scheduler's gateFunc check handles suppression.
+	if strings.HasPrefix(cond, "gate:") {
+		return true
+	}
 	// Unknown condition: pass through (v2 will add LLM evaluation)
 	return true
 }

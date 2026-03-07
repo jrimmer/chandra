@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"sync"
@@ -49,6 +50,7 @@ import (
 	"github.com/jrimmer/chandra/internal/skills"
 	"github.com/jrimmer/chandra/internal/tools"
 	"github.com/jrimmer/chandra/internal/tools/confirm"
+	operatortool "github.com/jrimmer/chandra/internal/tools/operator"
 	scheduletool "github.com/jrimmer/chandra/internal/tools/schedule"
 	"github.com/jrimmer/chandra/pkg"
 	"github.com/jrimmer/chandra/store"
@@ -354,6 +356,18 @@ func run(ctx context.Context, safeMode bool) error {
 		slog.Warn("chandrad: register write_skill failed", "err", err)
 	}
 
+	// Register operator tools (set_config, list_conversations, get_usage_stats).
+	setConfigTool := operatortool.NewSetConfigTool(cfg, cfgPath, db)
+	if err := registry.Register(setConfigTool); err != nil {
+		slog.Warn("chandrad: register set_config failed", "err", err)
+	}
+	if err := registry.Register(operatortool.NewListConversationsTool(db)); err != nil {
+		slog.Warn("chandrad: register list_conversations failed", "err", err)
+	}
+	if err := registry.Register(operatortool.NewGetUsageStatsTool(db)); err != nil {
+		slog.Warn("chandrad: register get_usage_stats failed", "err", err)
+	}
+
 	// -------------------------------------------------------------------
 	// Step 5c: Initialize infrastructure manager.
 	// -------------------------------------------------------------------
@@ -431,6 +445,23 @@ func run(ctx context.Context, safeMode bool) error {
 		}
 	}
 	sched := scheduler.NewScheduler(inStore, tickInterval, 0)
+	// Gate function: has_pending_work = any active intents that are NOT skill_cron entries.
+	// Used by heartbeat skill to skip LLM calls when there is nothing to check.
+	sched.SetGateFunc(func(gateCtx context.Context, intentID string) bool {
+		var count int
+		err2 := db.QueryRowContext(gateCtx,
+			`SELECT COUNT(*) FROM intents
+			 WHERE status = 'active'
+			   AND id != ?
+			   AND condition NOT LIKE 'skill_cron:%'
+			   AND condition NOT LIKE 'gate:%'`,
+			intentID,
+		).Scan(&count)
+		if err2 != nil {
+			return true // fail open
+		}
+		return count > 0
+	})
 	if err := sched.Start(ctx); err != nil {
 		slog.Warn("chandrad: scheduler start failed", "err", err)
 	} else {
@@ -628,6 +659,98 @@ func run(ctx context.Context, safeMode bool) error {
 	// Each conversation channel is drained by exactly one worker goroutine that
 	// runs turns sequentially; that goroutine exits when its channel is closed
 	// (triggered by ctx cancellation via convDone).
+	// ── Startup: drain pending messages (post-restart deliveries) ──────────
+	if discordConfigured && discordDC != nil {
+		startupCtx, startupCancel := context.WithTimeout(ctx, 10*time.Second)
+		rows, pendErr := db.QueryContext(startupCtx,
+			`SELECT id, channel_id, content FROM pending_messages ORDER BY created_at ASC`)
+		if pendErr == nil {
+			for rows.Next() {
+				var id int64
+				var chanID, content string
+				if err2 := rows.Scan(&id, &chanID, &content); err2 == nil {
+					_, _ = discordDC.Send(startupCtx, channels.OutboundMessage{
+						ChannelID: chanID,
+						Content:   content,
+					})
+					_, _ = db.ExecContext(startupCtx, `DELETE FROM pending_messages WHERE id = ?`, id)
+				}
+			}
+			rows.Close()
+		}
+
+		// ── Config confirmation watcher ──────────────────────────────────────
+		// If a cold config change was pending when the daemon restarted,
+		// prompt the user and start the countdown timer.
+		var cfgConfirmID int64
+		var cfgKey, cfgOldVal, cfgNewVal, cfgChanID, cfgUserID string
+		var cfgExpiresAt int64
+		cfgConfErr := db.QueryRowContext(startupCtx,
+			`SELECT id, key, old_value, new_value, channel_id, user_id, expires_at
+			 FROM config_confirmations ORDER BY created_at DESC LIMIT 1`,
+		).Scan(&cfgConfirmID, &cfgKey, &cfgOldVal, &cfgNewVal, &cfgChanID, &cfgUserID, &cfgExpiresAt)
+		if cfgConfErr == nil {
+			timeoutSecs := cfg.Operator.ConfigConfirmTimeoutSecs
+			if timeoutSecs <= 0 {
+				timeoutSecs = 30
+			}
+			expiresAt := time.Unix(cfgExpiresAt, 0)
+			remaining := time.Until(expiresAt)
+			if remaining <= 0 {
+				// Already expired — auto-revert.
+				slog.Warn("chandrad: config confirmation expired, reverting",
+					"key", cfgKey, "old", cfgOldVal, "new", cfgNewVal)
+				bakPath := expandPath("~/.config/chandra/config.toml.bak")
+				if _, statErr := os.Stat(bakPath); statErr == nil {
+					_ = os.Rename(bakPath, expandPath("~/.config/chandra/config.toml"))
+				}
+				_, _ = db.ExecContext(ctx, `DELETE FROM config_confirmations WHERE id = ?`, cfgConfirmID)
+				_, _ = discordDC.Send(startupCtx, channels.OutboundMessage{
+					ChannelID: cfgChanID,
+					Content: fmt.Sprintf("⏱️ Config confirmation timed out — reverted `%s` to `%s`.", cfgKey, cfgOldVal),
+				})
+			} else {
+				// Still valid — prompt user.
+				promptMsg := fmt.Sprintf(
+					"🔧 New config is live — `%s` changed `%s` → `%s`.\n"+
+						"Keep these settings? Reply **yes** to confirm or **no** to revert.\n"+
+						"Auto-reverting in %.0fs if no response.",
+					cfgKey, cfgOldVal, cfgNewVal, remaining.Seconds(),
+				)
+				_, _ = discordDC.Send(startupCtx, channels.OutboundMessage{
+					ChannelID: cfgChanID, Content: promptMsg,
+				})
+				// Countdown goroutine: revert on timeout.
+				go func(confirmID int64, key, oldVal, newVal, chanID string, deadline time.Time) {
+					select {
+					case <-time.After(time.Until(deadline)):
+						// Check if still pending (user may have confirmed/rejected via chat).
+						var count int
+						_ = db.QueryRowContext(ctx,
+							`SELECT COUNT(*) FROM config_confirmations WHERE id = ?`, confirmID,
+						).Scan(&count)
+						if count > 0 {
+							// Still pending — auto-revert.
+							slog.Warn("chandrad: config auto-revert on timeout", "key", key)
+							bakPath := expandPath("~/.config/chandra/config.toml.bak")
+							if _, statErr := os.Stat(bakPath); statErr == nil {
+								_ = os.Rename(bakPath, expandPath("~/.config/chandra/config.toml"))
+							}
+							_, _ = db.ExecContext(ctx,
+								`DELETE FROM config_confirmations WHERE id = ?`, confirmID)
+							_, _ = discordDC.Send(ctx, channels.OutboundMessage{
+								ChannelID: chanID,
+								Content: fmt.Sprintf("⏱️ No response — reverted `%s` to `%s`.", key, oldVal),
+							})
+						}
+					case <-ctx.Done():
+					}
+				}(cfgConfirmID, cfgKey, cfgOldVal, cfgNewVal, cfgChanID, expiresAt)
+			}
+		}
+		startupCancel()
+	}
+
 	if discordConfigured && discordDC != nil {
 		type convMsg struct {
 			sess *agent.Session
@@ -677,8 +800,23 @@ func run(ctx context.Context, safeMode bool) error {
 
 					callCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 					callCtx = scheduletool.WithDelivery(callCtx, cm.msg.ChannelID, cm.msg.UserID)
+					// Inject token usage accumulator so agent loop writes to it.
+					callCtx, tokenUsage := agent.WithTokenUsage(callCtx)
+					// Give set_config tool the current conversation context.
+					if sct, ok := setConfigTool.(interface{ SetCallContext(string, string) }); ok {
+						sct.SetCallContext(cm.msg.ChannelID, cm.msg.UserID)
+					}
 					resp, runErr := agentLoop.Run(callCtx, cm.sess, cm.msg)
 					cancel()
+					// Record token usage for this turn.
+					if tokenUsage.PromptTokens > 0 || tokenUsage.CompletionTokens > 0 {
+						_, _ = db.ExecContext(ctx,
+							`INSERT INTO token_usage (conv_id, user_id, channel_id, model, prompt_tokens, completion_tokens)
+							 VALUES (?, ?, ?, ?, ?, ?)`,
+							cm.sess.ConversationID, cm.msg.UserID, cm.msg.ChannelID,
+							cfg.Provider.DefaultModel, tokenUsage.PromptTokens, tokenUsage.CompletionTokens,
+						)
+					}
 
 					// Emit Done or Error after Run() returns — not inside Run() —
 					// so the reaction only fires once we know the outcome.
@@ -755,6 +893,46 @@ func run(ctx context.Context, safeMode bool) error {
 				case msg, ok := <-discordInbound:
 					if !ok {
 						return
+					}
+
+					// Config confirmation interceptor: if a cold config change is pending
+					// confirmation from this user, handle YES/NO before the access gate.
+					{
+						var cfgID int64
+						var cfgKey, cfgOldVal, cfgChan, cfgUser string
+						var cfgExp int64
+						pendErr2 := db.QueryRowContext(ctx,
+							`SELECT id, key, old_value, channel_id, user_id, expires_at FROM config_confirmations WHERE channel_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT 1`,
+							msg.ChannelID, msg.UserID,
+						).Scan(&cfgID, &cfgKey, &cfgOldVal, &cfgChan, &cfgUser, &cfgExp)
+						if pendErr2 == nil {
+							lower := strings.ToLower(strings.TrimSpace(msg.Content))
+							if strings.HasPrefix(lower, "yes") || strings.HasPrefix(lower, "keep") {
+								_, _ = db.ExecContext(ctx, `DELETE FROM config_confirmations WHERE id = ?`, cfgID)
+								_ = os.Remove(expandPath("~/.config/chandra/config.toml.bak"))
+								_, _ = discordDC.Send(ctx, channels.OutboundMessage{
+									ChannelID: msg.ChannelID,
+									Content:   fmt.Sprintf("✅ Config confirmed — `%s` stays at new value.", cfgKey),
+								})
+								continue
+							} else if strings.HasPrefix(lower, "no") || strings.HasPrefix(lower, "revert") {
+								bakPath := expandPath("~/.config/chandra/config.toml.bak")
+								if _, statErr := os.Stat(bakPath); statErr == nil {
+									_ = os.Rename(bakPath, expandPath("~/.config/chandra/config.toml"))
+								}
+								_, _ = db.ExecContext(ctx, `DELETE FROM config_confirmations WHERE id = ?`, cfgID)
+								_, _ = discordDC.Send(ctx, channels.OutboundMessage{
+									ChannelID: msg.ChannelID,
+									Content:   fmt.Sprintf("↩️ Reverted — `%s` restored to `%s`. Restarting…", cfgKey, cfgOldVal),
+								})
+								go func() {
+									cmd := exec.Command("sh", "-c",
+										"nohup /usr/local/bin/chandrad-config-apply >> /tmp/chandrad-config-apply.log 2>&1 &")
+									_ = cmd.Run()
+								}()
+								continue
+							}
+						}
 					}
 
 					// A1: !join <code> — intercept BEFORE the access gate so users
@@ -1174,6 +1352,23 @@ func registerHandlers(
 			overallStatus = "degraded"
 		}
 
+		// --- Token usage (today + all-time) ---
+		todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
+		var todayPrompt, todayCompletion, totalPrompt, totalCompletion int64
+		db.QueryRowContext(ctx, //nolint:errcheck
+			`SELECT COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0)
+			 FROM token_usage WHERE created_at >= ?`, todayStart,
+		).Scan(&todayPrompt, &todayCompletion)
+		db.QueryRowContext(ctx, //nolint:errcheck
+			`SELECT COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0) FROM token_usage`,
+		).Scan(&totalPrompt, &totalCompletion)
+
+		// --- Pending config confirmations ---
+		pendingConfirmations := 0
+		db.QueryRowContext(ctx, //nolint:errcheck
+			`SELECT COUNT(*) FROM config_confirmations WHERE expires_at > ?`, time.Now().Unix(),
+		).Scan(&pendingConfirmations)
+
 		return map[string]any{
 			"status":         overallStatus,
 			"uptime_seconds": uptime,
@@ -1187,6 +1382,15 @@ func registerHandlers(
 			"active_sessions":  activeSessions,
 			"memory_entries":   memoryEntries,
 			"action_log_today": actionLogToday,
+			"token_usage": map[string]any{
+				"today_prompt":      todayPrompt,
+				"today_completion":  todayCompletion,
+				"today_total":       todayPrompt + todayCompletion,
+				"alltime_prompt":    totalPrompt,
+				"alltime_completion": totalCompletion,
+				"alltime_total":     totalPrompt + totalCompletion,
+			},
+			"pending_confirmations": pendingConfirmations,
 		}, nil
 	})
 
@@ -1234,6 +1438,80 @@ func registerHandlers(
 	})
 
 	// memory.search
+	// conversations.list — list recent conversations.
+	srv.Handle("conversations.list", func(ctx context.Context, params json.RawMessage) (any, error) {
+		var args struct {
+			Limit     int    `json:"limit"`
+			ChannelID string `json:"channel_id"`
+		}
+		_ = json.Unmarshal(params, &args)
+		if args.Limit <= 0 { args.Limit = 10 }
+		if args.Limit > 100 { args.Limit = 100 }
+
+		var query string
+		var qargs []any
+		if args.ChannelID != "" {
+			query = `SELECT conversation_id, channel_id, COUNT(*) as turns, MIN(started_at), MAX(last_active)
+			          FROM sessions WHERE channel_id = ? GROUP BY conversation_id ORDER BY MAX(last_active) DESC LIMIT ?`
+			qargs = []any{args.ChannelID, args.Limit}
+		} else {
+			query = `SELECT conversation_id, channel_id, COUNT(*) as turns, MIN(started_at), MAX(last_active)
+			          FROM sessions GROUP BY conversation_id ORDER BY MAX(last_active) DESC LIMIT ?`
+			qargs = []any{args.Limit}
+		}
+		rows, err2 := db.QueryContext(ctx, query, qargs...)
+		if err2 != nil { return nil, err2 }
+		defer rows.Close()
+		type row struct {
+			ConvID    string `json:"conv_id"`
+			ChannelID string `json:"channel_id"`
+			Turns     int    `json:"turns"`
+			FirstAt   int64  `json:"started_at"`
+			LastAt    int64  `json:"last_active"`
+		}
+		var out []row
+		for rows.Next() {
+			var r row
+			if scanErr := rows.Scan(&r.ConvID, &r.ChannelID, &r.Turns, &r.FirstAt, &r.LastAt); scanErr == nil {
+				out = append(out, r)
+			}
+		}
+		return out, nil
+	})
+
+	// conversations.history — full episode list for a conversation.
+	srv.Handle("conversations.history", func(ctx context.Context, params json.RawMessage) (any, error) {
+		var args struct {
+			ConvID string `json:"conv_id"`
+		}
+		_ = json.Unmarshal(params, &args)
+		if args.ConvID == "" { return nil, fmt.Errorf("conv_id required") }
+		rows, err2 := db.QueryContext(ctx,
+			`SELECT e.role, e.content, e.timestamp
+			 FROM episodes e
+			 JOIN sessions s ON s.id = e.session_id
+			 WHERE s.conversation_id LIKE ?
+			 ORDER BY e.timestamp ASC LIMIT 200`,
+			args.ConvID+"%",
+		)
+		if err2 != nil { return nil, err2 }
+		defer rows.Close()
+		type ep struct {
+			Role      string `json:"role"`
+			Content   string `json:"content"`
+			Timestamp int64  `json:"timestamp"`
+		}
+		var out []ep
+		for rows.Next() {
+			var e ep
+			if scanErr := rows.Scan(&e.Role, &e.Content, &e.Timestamp); scanErr == nil {
+				if len(e.Content) > 300 { e.Content = e.Content[:300] + "…" }
+				out = append(out, e)
+			}
+		}
+		return out, nil
+	})
+
 	srv.Handle("memory.search", func(ctx context.Context, params json.RawMessage) (any, error) {
 		var p struct {
 			Query string `json:"query"`

@@ -3,6 +3,7 @@
 package scheduler
 
 import (
+	"strings"
 	"context"
 	"fmt"
 	"log/slog"
@@ -40,6 +41,9 @@ type scheduler struct {
 	intentStore  intent.IntentStore
 	tickInterval time.Duration
 	turns        chan ScheduledTurn
+	// gateFunc, when non-nil, is called before emitting a turn for an intent
+	// that declares gate: has_pending_work. Returns true if the turn should fire.
+	gateFunc func(ctx context.Context, intentID string) bool
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -57,6 +61,13 @@ func NewScheduler(intentStore intent.IntentStore, tickInterval time.Duration, tu
 		tickInterval: tickInterval,
 		turns:        make(chan ScheduledTurn, turnsBufferSize),
 	}
+}
+
+// SetGateFunc registers a function that gates intent firing based on runtime state.
+// The function is called with the intent ID; return true to allow firing, false to skip.
+// Used to implement gate: has_pending_work (skips heartbeat when no active non-cron intents).
+func (s *scheduler) SetGateFunc(fn func(ctx context.Context, intentID string) bool) {
+	s.gateFunc = fn
 }
 
 // Start launches the background tick goroutine. The provided context controls
@@ -123,6 +134,18 @@ func (s *scheduler) tick(ctx context.Context) {
 		if !evaluateCondition(in) {
 			slog.Debug("scheduler: condition not satisfied, skipping intent", "id", in.ID, "condition", in.Condition)
 			continue
+		}
+
+		// gate: has_pending_work — only fire if gateFunc approves.
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(in.Condition)), "gate:") && s.gateFunc != nil {
+			if !s.gateFunc(ctx, in.ID) {
+				slog.Debug("scheduler: gate suppressed intent", "id", in.ID, "condition", in.Condition)
+				// Reschedule without firing so it checks again next tick.
+				in.LastChecked = time.Now()
+				in.NextCheck = time.Now().Add(s.tickInterval)
+				_ = s.intentStore.Update(ctx, in)
+				continue
+			}
 		}
 
 		turn := ScheduledTurn{

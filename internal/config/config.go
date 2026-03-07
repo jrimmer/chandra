@@ -157,6 +157,14 @@ type InfrastructureConfig struct {
 	CacheTTL           string `toml:"cache_ttl"`
 }
 
+// OperatorConfig holds operator-facing settings for Chandra self-management.
+// TOML section: [operator]
+type OperatorConfig struct {
+	// ConfigConfirmTimeoutSecs is how long to wait for user confirmation after
+	// a cold config change (restart required). Default 30s, clamped [15,120].
+	ConfigConfirmTimeoutSecs int `toml:"config_confirm_timeout_secs"`
+}
+
 // Config is the top-level configuration struct.
 type Config struct {
 	Identity       IdentityConfig       `toml:"identity"`
@@ -174,6 +182,7 @@ type Config struct {
 	Plans          PlansConfig          `toml:"plans"`
 	Planner        PlannerConfig        `toml:"planner"`
 	Infrastructure InfrastructureConfig `toml:"infrastructure"`
+	Operator       OperatorConfig       `toml:"operator"`
 }
 
 // Load reads and parses the TOML config file at path, performs env var
@@ -316,6 +325,10 @@ func applyDefaults(cfg *Config) {
 	if cfg.Infrastructure.HostTimeout == "" {
 		cfg.Infrastructure.HostTimeout = "30s"
 	}
+	// ConfigConfirmTimeoutSecs: default 30, enforced [15,120] in validate().
+	if cfg.Operator.ConfigConfirmTimeoutSecs == 0 {
+		cfg.Operator.ConfigConfirmTimeoutSecs = 30
+	}
 	if cfg.Infrastructure.CacheTTL == "" {
 		cfg.Infrastructure.CacheTTL = "5m"
 	}
@@ -388,6 +401,22 @@ func validate(cfg *Config) error {
 		// mode was defaulted to "embedded", so this shouldn't happen, but handle it
 	default:
 		errs = append(errs, fmt.Sprintf("mqtt.mode %q is not valid (embedded, external, disabled)", cfg.MQTT.Mode))
+	}
+
+	// Clamp ConfigConfirmTimeoutSecs to [15, 120].
+	const (
+		confirmMin = 15
+		confirmMax = 120
+	)
+	if cfg.Operator.ConfigConfirmTimeoutSecs < confirmMin {
+		slog.Warn("config: config_confirm_timeout_secs below minimum, clamping",
+			"got", cfg.Operator.ConfigConfirmTimeoutSecs, "min", confirmMin)
+		cfg.Operator.ConfigConfirmTimeoutSecs = confirmMin
+	}
+	if cfg.Operator.ConfigConfirmTimeoutSecs > confirmMax {
+		slog.Warn("config: config_confirm_timeout_secs above maximum, clamping",
+			"got", cfg.Operator.ConfigConfirmTimeoutSecs, "max", confirmMax)
+		cfg.Operator.ConfigConfirmTimeoutSecs = confirmMax
 	}
 
 	if len(errs) > 0 {

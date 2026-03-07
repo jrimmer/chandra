@@ -1374,6 +1374,43 @@ func init() {
 	rootCmd.AddCommand(configCmd)
 	securityCmd.AddCommand(securityAuditCmd)
 	rootCmd.AddCommand(securityCmd)
+	conversationsCmd.AddCommand(conversationsListCmd, conversationsHistoryCmd)
+	rootCmd.AddCommand(conversationsCmd)
+}
+
+// ---- conversations commands -------------------------------------------------
+
+var conversationsCmd = &cobra.Command{
+	Use:   "conversations",
+	Short: "Inspect Chandra's conversation history",
+}
+
+var conversationsListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List recent conversations",
+	Run: func(cmd *cobra.Command, args []string) {
+		limit, _ := cmd.Flags().GetInt("limit")
+		channel, _ := cmd.Flags().GetString("channel")
+		params := map[string]any{"limit": limit}
+		if channel != "" {
+			params["channel_id"] = channel
+		}
+		call("conversations.list", params)
+	},
+}
+
+var conversationsHistoryCmd = &cobra.Command{
+	Use:   "history <conv-id>",
+	Short: "Show message history for a conversation",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		call("conversations.history", map[string]any{"conv_id": args[0]})
+	},
+}
+
+func init() {
+	conversationsListCmd.Flags().Int("limit", 10, "Maximum number of conversations to return")
+	conversationsListCmd.Flags().String("channel", "", "Filter by Discord channel ID")
 }
 
 // resolveDefaultConfigPath returns the default config file path, respecting

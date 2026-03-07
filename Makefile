@@ -32,6 +32,8 @@ test-all:
 install: build
 	sudo cp $(BINDIR)/chandrad /usr/local/bin/chandrad
 	sudo cp $(BINDIR)/chandra  /usr/local/bin/chandra
+	sudo cp scripts/chandrad-config-apply.sh /usr/local/bin/chandrad-config-apply
+	sudo chmod +x /usr/local/bin/chandrad-config-apply
 
 clean:
 	rm -f $(BINDIR)/chandrad $(BINDIR)/chandra

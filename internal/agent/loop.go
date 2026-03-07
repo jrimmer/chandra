@@ -88,6 +88,27 @@ type AgentLoop interface {
 	DrainPostProcess(timeout time.Duration)
 }
 
+// TokenUsage accumulates token counts across LLM calls in a single Run().
+// Callers can inject a pointer via WithTokenUsage / TokenUsageFrom context.
+type TokenUsage struct {
+	PromptTokens     int
+	CompletionTokens int
+}
+
+type tokenUsageKey struct{}
+
+// WithTokenUsage returns a new context that accumulates token usage.
+func WithTokenUsage(ctx context.Context) (context.Context, *TokenUsage) {
+	u := &TokenUsage{}
+	return context.WithValue(ctx, tokenUsageKey{}, u), u
+}
+
+// TokenUsageFrom retrieves the TokenUsage accumulator from context, or nil.
+func TokenUsageFrom(ctx context.Context) *TokenUsage {
+	v, _ := ctx.Value(tokenUsageKey{}).(*TokenUsage)
+	return v
+}
+
 // Compile-time assertion.
 var _ AgentLoop = (*agentLoop)(nil)
 
@@ -204,6 +225,11 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 			Messages: messages,
 			Tools:    window.Tools,
 		})
+		// Accumulate token usage for the caller (main.go writes to DB).
+		if tu := TokenUsageFrom(ctx); tu != nil {
+			tu.PromptTokens += resp.InputTokens
+			tu.CompletionTokens += resp.OutputTokens
+		}
 		if err != nil {
 			_ = l.cfg.ActionLog.Record(ctx, actionlog.ActionEntry{
 				Type:      actionlog.ActionError,

@@ -176,5 +176,74 @@ All schema changes go through `store/migrations/`. Applied in order at startup v
 | 007 | memory_fts | FTS5 virtual table on memory_entries |
 | 008 | semantic_user_scope | user_id column on memory_entries |
 | 009 | intent_recurrence | recurrence_interval_ms on intents |
+| 010 | pending_messages | pending_messages, config_confirmations, token_usage tables |
 
 Migrations are append-only. Never edit an existing migration; add a new one.
+
+## Operator Tooling (v2, 2026-03-07)
+
+Five operator tooling features shipped together:
+
+### 1. Config Management (`set_config` tool)
+
+**Files:** `internal/config/settable.go`, `internal/config/config.go` (OperatorConfig), `internal/tools/operator/set_config.go`
+
+**Hot keys** (no restart): `identity.max_tool_rounds`, `identity.persona_file`, `channels.discord.require_mention`, `channels.discord.allow_bots`, `channels.discord.reaction_status`, `channels.discord.edit_in_place`, `operator.config_confirm_timeout_secs`
+
+**Cold keys** (restart + confirmation): all `provider.*`, `identity.name/description`, `database.path`, `channels.discord.bot_token`
+
+**Windows confirmation pattern:** Cold changes trigger:
+1. Validate value (`internal/config/settable.go: ValidateValue`)
+2. Write `config.toml.bak` (old value backup)
+3. Write new `config.toml`
+4. Insert `config_confirmations` DB row (user_id, channel_id, expires_at)
+5. Insert `pending_messages` row ("Restarting…")
+6. Exec `chandrad-config-apply` (restart + health poll + auto-restore on failure)
+7. On startup: drain pending_messages, post confirmation prompt, start countdown goroutine
+8. User replies yes → delete confirmation, delete .bak; no/timeout → restore .bak, restart
+
+**Config timeout:** `operator.config_confirm_timeout_secs` (default 30, min 15, max 120). Clamped in `config.validate()`.
+
+### 2. Restart/Update UX
+
+**Files:** `cmd/chandrad/main.go` (startup drain), `scripts/chandrad-config-apply.sh`
+
+**pending_messages table** (migration 010): `(id, channel_id, content, created_at)`. Drained on startup before accepting inbound messages.
+
+**chandrad-config-apply script**: Wraps `chandrad-update` with post-startup health poll. If daemon fails to start in 30s, restores `config.toml.bak` and restarts again.
+
+### 3. Session/Conversation Visibility
+
+**CLI:** `chandra conversations list [--limit N] [--channel ID]`, `chandra conversations history <conv-id>`
+
+**API handlers:** `conversations.list`, `conversations.history` in `cmd/chandrad/main.go`
+
+**Tool:** `list_conversations` in `internal/tools/operator/conversations.go`
+
+### 4. Cost/Token Tracking
+
+**Migration 010** also adds `token_usage (id, conv_id, user_id, channel_id, model, prompt_tokens, completion_tokens, created_at)`.
+
+**Capture:** `agent.WithTokenUsage(ctx)` injects an accumulator; `agentLoop.Run()` adds `resp.InputTokens`/`resp.OutputTokens` after each LLM call. Conv worker writes to DB after `Run()` returns.
+
+**Surface:** `daemon.health` response includes `token_usage: {today_total, alltime_total, ...}`.
+
+**Tool:** `get_usage_stats` in `internal/tools/operator/conversations.go`
+
+### 5. Diagnostics
+
+`daemon.health` now also returns `pending_confirmations` count.
+
+### 6. Heartbeat Idle Gate (bonus)
+
+**Files:** `internal/scheduler/scheduler.go` (`SetGateFunc`), `internal/scheduler/rules.go` (`gate:` prefix), `skills/heartbeat/SKILL.md`
+
+Skill cron frontmatter supports `condition: gate:has_pending_work`. Before emitting a turn, the scheduler calls `gateFunc`. For `has_pending_work`: counts active non-gate, non-skill_cron intents. If 0, skips LLM call entirely (zero tokens). Heartbeat only fires when there's something to check.
+
+### Migration 010 tables
+
+| Table | Purpose |
+|---|---|
+| `pending_messages` | Post-restart message delivery |
+| `config_confirmations` | Windows-pattern cold config change tracking |
+| `token_usage` | Per-turn LLM token accounting |
