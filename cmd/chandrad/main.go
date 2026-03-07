@@ -1466,13 +1466,16 @@ func registerHandlers(
 			ConvID    string `json:"conv_id"`
 			ChannelID string `json:"channel_id"`
 			Turns     int    `json:"turns"`
-			FirstAt   int64  `json:"started_at"`
-			LastAt    int64  `json:"last_active"`
+			FirstAt   string `json:"started_at"`
+			LastAt    string `json:"last_active"`
 		}
 		var out []row
 		for rows.Next() {
 			var r row
-			if scanErr := rows.Scan(&r.ConvID, &r.ChannelID, &r.Turns, &r.FirstAt, &r.LastAt); scanErr == nil {
+			var rawFirst, rawLast int64
+			if scanErr := rows.Scan(&r.ConvID, &r.ChannelID, &r.Turns, &rawFirst, &rawLast); scanErr == nil {
+				r.FirstAt = time.UnixMilli(rawFirst).UTC().Format(time.RFC3339)
+				r.LastAt  = time.UnixMilli(rawLast).UTC().Format(time.RFC3339)
 				out = append(out, r)
 			}
 		}
