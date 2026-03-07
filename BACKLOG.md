@@ -131,6 +131,32 @@ Items are grouped by theme, each with a priority and source reference.
 
 ---
 
+## Workers & Parallel Agent Execution
+
+**Design doc:** `WORKERS.md` (2026-03-07) — approved design, implementation pending.
+
+Workers extend Chandra's goroutine-per-conversation model with on-demand isolated agents spawnable mid-turn. The existing executor already dispatches tool calls in parallel, so multiple `spawn_agent` calls in one turn launch workers concurrently with no additional orchestration.
+
+| # | Item | Priority | Notes |
+|---|------|----------|-------|
+| W1 | `internal/agent/worker/pool.go` — `Pool`, `Worker`, `WorkerTask`, `WorkerResult` structs + goroutine lifecycle | P2 | Core; blocks W2–W7 |
+| W2 | `spawn_agent` + `await_agents` tools registered in main.go | P2 | Depends on W1 |
+| W3 | Migration 012: `worker_id` column on `token_usage` table; itemized + rollup in `get_usage_stats` | P2 | Depends on W1 |
+| W4 | Inactivity watchdog — cancel worker if no LLM activity for 5min (not wall-clock) | P2 | Depends on W1 |
+| W5 | Edit-in-place progress updates from worker pool (N/M done counter in placeholder) | P2 | Depends on W1+W2 |
+| W6 | Persona guidance: when to parallelize autonomously (WORKERS.md §Implicit parallelism) | P2 | Depends on W2 |
+| W7 | `get_usage_stats` itemized breakdown: parent + per-worker subtotals + grand total | P2 | Depends on W3 |
+
+**Decisions (locked):**
+- Max concurrency: **3** (configurable via `identity.max_workers`)
+- Context: workers inherit **semantic memory (read-only)** + explicit task context param; no episodic inheritance, no episodic writes
+- Tool allowlist: exec/read_file/write_file/web_search/get_current_time/read_skill; NO spawn_agent (depth=1), set_config, write_skill, note_context, schedule_reminder
+- Timeout: **inactivity-based** (5min without LLM activity), not wall-clock — preserves long active workloads
+- Token tracking: per-worker itemized + subtotal rollup in `get_usage_stats`
+
+
+---
+
 ## Infra & Ops
 
 | # | Item | Priority | Source |
@@ -170,7 +196,7 @@ Items are grouped by theme, each with a priority and source reference.
 
 ---
 
-*Last updated: 2026-03-07. Added: M5 user attribution, T4 CI pipeline. Closed: T1 T2 T3. Added feature comparison summary.*
+*Last updated: 2026-03-07. Added: M5, T4, W1–W7 (worker/parallel agent execution), feature comparison summary. Closed: T1 T2 T3.*
 
 ---
 
