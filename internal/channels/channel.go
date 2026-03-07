@@ -87,6 +87,13 @@ type DeliveryUpdater interface {
 
 // ─── Channel interface ────────────────────────────────────────────────────────
 
+// Approver is implemented by channel adapters that support interactive operator
+// approval before executing high-risk commands. The exec tool uses this to
+// pause and ask before running tier-2 dangerous commands.
+type Approver interface {
+	RequestApproval(ctx context.Context, channelID, prompt string, timeout time.Duration) (bool, error)
+}
+
 // Channel is the interface that all messaging platform adapters must implement.
 type Channel interface {
 	ID() string

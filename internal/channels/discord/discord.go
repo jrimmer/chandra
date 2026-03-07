@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/jrimmer/chandra/internal/approvals"
 	"github.com/jrimmer/chandra/internal/channels"
 )
 
@@ -81,6 +82,12 @@ type Discord struct {
 	// inbound message ID. Cleaned up automatically when the turn completes.
 	delivery    sync.Map // map[messageID]*deliveryTracker
 	editTargets sync.Map // map[inboundMsgID]placeholderMsgID for edit-in-place
+
+	// approvalBroker resolves pending exec approval requests when the
+	// operator reacts with ✅ or ❌ to an approval message.
+	// approvalAllowedUsers gates which user IDs can approve commands.
+	approvalBroker       *approvals.Broker
+	approvalAllowedUsers map[string]struct{}
 }
 
 // deliveryTracker holds the active reaction controller and typing heartbeat
@@ -109,7 +116,7 @@ func NewDiscord(token string, channelIDs []string) (*Discord, error) {
 	// IntentGuildMessages: receive MESSAGE_CREATE events in guild channels.
 	// IntentMessageContent: receive message body (privileged intent; must be
 	// enabled in the Discord Developer Portal under Privileged Gateway Intents).
-	session.Identify.Intents = discordgo.IntentGuildMessages | discordgo.IntentMessageContent
+	session.Identify.Intents = discordgo.IntentGuildMessages | discordgo.IntentMessageContent | discordgo.IntentGuildMessageReactions
 
 	allowed := make(map[string]struct{}, len(channelIDs))
 	for _, id := range channelIDs {
@@ -267,6 +274,29 @@ func (d *Discord) Listen(ctx context.Context, msgs chan<- channels.InboundMessag
 			}
 			d.mu.Unlock()
 			slog.Warn("discord: disconnected; discordgo will attempt reconnect")
+		})
+
+		// Exec approval: resolve pending approval requests on ✅/❌ reactions.
+		d.session.AddHandler(func(s *discordgo.Session, e *discordgo.MessageReactionAdd) {
+			if d.approvalBroker == nil {
+				return
+			}
+			// Ignore reactions from the bot itself.
+			if e.UserID == s.State.User.ID {
+				return
+			}
+			// Gate to allowed users.
+			if d.approvalAllowedUsers != nil {
+				if _, ok := d.approvalAllowedUsers[e.UserID]; !ok {
+					return
+				}
+			}
+			switch e.Emoji.Name {
+			case "✅":
+				d.approvalBroker.Resolve(e.MessageID, true)
+			case "❌":
+				d.approvalBroker.Resolve(e.MessageID, false)
+			}
 		})
 
 	})
@@ -497,6 +527,55 @@ func resolveToolStatusText(toolName string) string {
 		return "Working on skill\u2026"
 	default:
 		return "Using `" + toolName + "`\u2026"
+	}
+}
+
+// SetApprovalBroker wires the exec approval broker and the set of user IDs
+// that are allowed to approve commands via ✅/❌ reactions.
+func (d *Discord) SetApprovalBroker(b *approvals.Broker, allowedUsers map[string]struct{}) {
+	d.approvalBroker = b
+	d.approvalAllowedUsers = allowedUsers
+}
+
+// RequestApproval implements shelltool.Approver. It posts a message to channelID
+// with the approval prompt and ✅/❌ reactions, then blocks until the operator
+// reacts or the timeout fires. Returns true if approved, false if denied or timed out.
+func (d *Discord) RequestApproval(ctx context.Context, channelID, prompt string, timeout time.Duration) (bool, error) {
+	if d.approvalBroker == nil {
+		return false, fmt.Errorf("discord: approval broker not configured")
+	}
+
+	// Post the approval request message.
+	msg, err := d.session.ChannelMessageSend(channelID, prompt)
+	if err != nil {
+		return false, fmt.Errorf("discord: approval: send: %w", err)
+	}
+
+	// Add the approval reactions (ignore errors — cosmetic only).
+	_ = d.session.MessageReactionAdd(channelID, msg.ID, "✅")
+	_ = d.session.MessageReactionAdd(channelID, msg.ID, "❌")
+
+	// Register a waiter in the broker keyed by message ID.
+	resultCh := d.approvalBroker.Register(msg.ID)
+	defer d.approvalBroker.Cancel(msg.ID)
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case approved := <-resultCh:
+		status := "✅ Approved — executing."
+		if !approved {
+			status = "❌ Denied — not executed."
+		}
+		_, _ = d.session.ChannelMessageEdit(channelID, msg.ID, prompt+"\n\n"+status)
+		return approved, nil
+	case <-timer.C:
+		_, _ = d.session.ChannelMessageEdit(channelID, msg.ID,
+			prompt+"\n\n⏱️ *Timed out — not executed.*")
+		return false, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
 	}
 }
 

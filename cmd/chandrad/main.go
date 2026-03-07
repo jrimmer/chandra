@@ -23,6 +23,7 @@ import (
 
 	"github.com/jrimmer/chandra/internal/access"
 	"github.com/jrimmer/chandra/internal/actionlog"
+	approvals "github.com/jrimmer/chandra/internal/approvals"
 	filesystemtool "github.com/jrimmer/chandra/internal/tools/filesystem"
 	shelltool "github.com/jrimmer/chandra/internal/tools/shell"
 	"github.com/jrimmer/chandra/internal/agent"
@@ -285,7 +286,24 @@ func run(ctx context.Context, safeMode bool) error {
 	if err := registry.Register(filesystemtool.NewWriteFileTool()); err != nil {
 		slog.Warn("chandrad: register write_file failed", "err", err)
 	}
-	if err := registry.Register(shelltool.NewExecTool()); err != nil {
+	// execApproverDelegate is set after Discord initialisation so the exec tool
+	// can post approval requests to the live Discord channel. The ApproverFunc
+	// closure captures the delegate by reference (via the mu-guarded slot below).
+	var (
+		execApproverMu       sync.RWMutex
+		execApproverDelegate shelltool.Approver // nil until Discord is ready
+	)
+	execApprover := shelltool.ApproverFunc(func(ctx context.Context, channelID, prompt string, timeout time.Duration) (bool, error) {
+		execApproverMu.RLock()
+		d := execApproverDelegate
+		execApproverMu.RUnlock()
+		if d == nil {
+			// Discord not configured — soft block with explanation.
+			return false, fmt.Errorf("exec: approval channel not available (Discord not configured)")
+		}
+		return d.RequestApproval(ctx, channelID, prompt, timeout)
+	})
+	if err := registry.Register(shelltool.NewExecToolWithApproval(execApprover)); err != nil {
 		slog.Warn("chandrad: register exec failed", "err", err)
 	}
 	if err := registry.Register(scheduletool.NewGetCurrentTimeTool()); err != nil {
@@ -502,6 +520,23 @@ func run(ctx context.Context, safeMode bool) error {
 			dc.SetReactionStatus(reactionOn)
 			dc.SetEditInPlace(cfg.Channels.Discord.EditInPlace)
 		}
+		// Wire exec approval broker so interactive approval works for tier-2 commands.
+		approvalBroker := approvals.New()
+		// Build allowed-user set from DB for reaction gating.
+		approvalAllowed := map[string]struct{}{}
+		if rows, qErr := db.QueryContext(ctx, `SELECT DISTINCT user_id FROM allowed_users`); qErr == nil {
+			for rows.Next() {
+				var uid string
+				if rows.Scan(&uid) == nil {
+					approvalAllowed[uid] = struct{}{}
+				}
+			}
+			_ = rows.Close()
+		}
+		if dcErr == nil {
+			dc.SetApprovalBroker(approvalBroker, approvalAllowed)
+		}
+
 		if dcErr != nil {
 			return fmt.Errorf("chandrad: discord init: %w", dcErr)
 		}
@@ -521,6 +556,10 @@ func run(ctx context.Context, safeMode bool) error {
 		discordInbound = inbound
 		discordDC = dc
 		discordSupervisor = sup
+		// Wire Discord as the exec approval channel now that dc is live.
+		execApproverMu.Lock()
+		execApproverDelegate = dc
+		execApproverMu.Unlock()
 	} else {
 		slog.Info("chandrad: Discord not configured, skipping")
 	}

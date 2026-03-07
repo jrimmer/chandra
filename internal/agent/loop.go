@@ -21,6 +21,7 @@ import (
 	"github.com/jrimmer/chandra/internal/scheduler"
 	"github.com/jrimmer/chandra/internal/skills"
 	"github.com/jrimmer/chandra/internal/tools"
+	shelltool "github.com/jrimmer/chandra/internal/tools/shell"
 	"github.com/jrimmer/chandra/pkg"
 )
 
@@ -285,7 +286,10 @@ func (l *agentLoop) Run(ctx context.Context, session *Session, msg channels.Inbo
 					ToolName:  safeToolCalls[0].Name,
 				})
 			}
-			results := l.cfg.Executor.Execute(ctx, safeToolCalls)
+			// Inject channelID so the exec tool can post approval requests
+			// to the correct channel when a tier-2 command is requested.
+			execCtx := shelltool.WithChannelID(ctx, msg.ChannelID)
+			results := l.cfg.Executor.Execute(execCtx, safeToolCalls)
 			// Emit ToolEnd after all tools in this round complete.
 			l.emitDelivery(channels.DeliveryEvent{
 				Kind:      channels.DeliveryToolEnd,
