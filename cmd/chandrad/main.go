@@ -46,6 +46,7 @@ import (
 	"github.com/jrimmer/chandra/internal/provider/embedcache"
 	"github.com/jrimmer/chandra/internal/provider/embeddings"
 	"github.com/jrimmer/chandra/internal/provider/openai"
+	"github.com/jrimmer/chandra/internal/commands"
 	"github.com/jrimmer/chandra/internal/scheduler"
 	"github.com/jrimmer/chandra/internal/skills"
 	"github.com/jrimmer/chandra/internal/tools"
@@ -534,6 +535,19 @@ func run(ctx context.Context, safeMode bool) error {
 	}
 	mgr.Start(ctx)
 	var sessionMgr agent.Manager = mgr
+
+	// Command registry — built-in ! commands + skill-delegated commands.
+	// Constructed after sessionMgr is assigned so Env can hold the interface.
+	cmdEnv := &commands.Env{
+		DB:        db,
+		Sessions:  sessionMgr,
+		Scheduler: sched,
+		Skills:    skillReg,
+		Config:    cfg,
+		StartedAt: startTime,
+	}
+	cmdRegistry := commands.NewRegistry(cmdEnv)
+	cmdRegistry.SyncSkillCommands(skillReg)
 	slog.Info("chandrad: session manager started")
 
 	// -------------------------------------------------------------------
@@ -798,7 +812,34 @@ func run(ctx context.Context, safeMode bool) error {
 						}
 					}
 
-					callCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+					// ! command interceptor in worker — session is available here (post-access-gate).
+				if strings.HasPrefix(strings.TrimSpace(cm.msg.Content), "!") {
+					cmdName, _ := commands.Parse(cm.msg.Content)
+					if cmdName != "" && cmdName != "join" {
+						cmdInput := commands.Command{
+							UserID:    cm.msg.UserID,
+							ChannelID: cm.msg.ChannelID,
+							SessionID: cm.sess.ID,
+						}
+						cmdResult, cmdHandled := cmdRegistry.Dispatch(ctx, cm.msg.Content, cmdInput, cmdEnv)
+						if cmdHandled {
+							// Remove the "…" placeholder (no LLM response coming).
+							if placeholderID != "" {
+								_ = discordDC.Edit(ctx, cm.msg.ChannelID, placeholderID, cmdResult.Content)
+							} else if cmdResult.Content != "" {
+								_, _ = discordDC.Send(ctx, channels.OutboundMessage{
+									ChannelID: cm.msg.ChannelID,
+									Content:   cmdResult.Content,
+									ReplyToID: cm.msg.ID,
+								})
+							}
+							continue
+						}
+						// Skill-delegated: fall through to LLM.
+					}
+				}
+
+				callCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 					callCtx = scheduletool.WithDelivery(callCtx, cm.msg.ChannelID, cm.msg.UserID)
 					// Inject token usage accumulator so agent loop writes to it.
 					callCtx, tokenUsage := agent.WithTokenUsage(callCtx)
@@ -959,6 +1000,7 @@ func run(ctx context.Context, safeMode bool) error {
 						}
 						continue // do not pass !join messages to the agent
 					}
+
 
 					// Per-message access control.
 					policy := cfg.Channels.Discord.AccessPolicy

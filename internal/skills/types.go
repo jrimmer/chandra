@@ -35,6 +35,13 @@ type CronConfig struct {
 	Channel  string `yaml:"channel"`  // Delivery channel hint: "default" or explicit channel_id
 }
 
+// SkillCommand declares a user-invocable !command exposed by a skill.
+type SkillCommand struct {
+	Name        string `yaml:"name"`
+	Description string `yaml:"description"`
+	Usage       string `yaml:"usage"`
+}
+
 // Skill represents a loaded SKILL.md with parsed metadata and content.
 type Skill struct {
 	Name          string
@@ -52,6 +59,7 @@ type Skill struct {
 	Generated     *GeneratedMeta // Non-nil for auto-generated skills
 	Cron          *CronConfig    // Non-nil if skill declares a recurring cron job
 	Category      string         // Optional skill category, e.g. "proactive", "utility", "monitoring"
+	Commands      []SkillCommand // User-invocable !commands exposed by this skill
 }
 
 // SkillRequirements declares what a skill needs to function.

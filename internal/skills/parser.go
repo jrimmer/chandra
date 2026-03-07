@@ -22,6 +22,7 @@ type frontmatter struct {
 	Generated     *GeneratedMeta    `yaml:"generated"`
 	Cron          *CronConfig       `yaml:"cron"`
 	Category      string            `yaml:"category"`
+	Commands      []SkillCommand    `yaml:"commands"`
 }
 
 // ParseSkillMD parses a SKILL.md file into a Skill.
@@ -59,6 +60,7 @@ func ParseSkillMD(data []byte, path string) (Skill, error) {
 		Generated:     meta.Generated,
 		Cron:          meta.Cron,
 		Category:      meta.Category,
+		Commands:      meta.Commands,
 	}, nil
 }
 
