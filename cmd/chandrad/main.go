@@ -810,21 +810,66 @@ func run(ctx context.Context, safeMode bool) error {
 			msg  channels.InboundMessage
 		}
 
+		// convState holds the per-conversation queue and a per-turn cancel func.
+		// cancelTurnFn is set at the start of each turn and cleared on completion.
+		// The router calls cancelCurrentTurn() to interrupt an in-flight turn.
+		type convState struct {
+			queue        chan convMsg
+			mu           sync.Mutex
+			cancelTurnFn func()
+		}
+		cancelCurrentTurn := func(state *convState) {
+			state.mu.Lock()
+			f := state.cancelTurnFn
+			state.mu.Unlock()
+			if f != nil {
+				f()
+			}
+		}
+		setTurnCancel := func(state *convState, cancel func()) {
+			state.mu.Lock()
+			state.cancelTurnFn = cancel
+			state.mu.Unlock()
+		}
+
+		// isStopSignal reports whether content is a safety interrupt request.
+		// Matched case-insensitively. Wide net: a false positive (stopping when
+		// the user didn't mean to) is less harmful than a false negative.
+		isStopSignal := func(content string) bool {
+			lower := strings.ToLower(strings.TrimSpace(content))
+			phrases := []string{
+				"stop", "cancel", "abort", "halt",
+				"!stop", "!cancel", "!abort",
+				"stop that", "stop it", "stop everything", "stop now", "stop please",
+				"cancel that", "cancel everything", "cancel it",
+				"abort that", "abort everything",
+				"never mind", "nevermind",
+				"forget it", "forget that",
+			}
+			for _, p := range phrases {
+				if lower == p || strings.HasPrefix(lower, p+" ") {
+					return true
+				}
+			}
+			return false
+		}
+
 		var (
-			convMu    sync.Mutex
-			convQueues = make(map[string]chan convMsg) // key: conversationID
+			convMu     sync.Mutex
+			convQueues = make(map[string]*convState) // key: conversationID
 		)
 
-		// ensureWorker returns the queue channel for a conversation, creating it
+		// ensureWorker returns the convState for a conversation, creating it
 		// (and its worker goroutine) on first use.
-		ensureWorker := func(convID string) chan convMsg {
+		ensureWorker := func(convID string) *convState {
 			convMu.Lock()
 			defer convMu.Unlock()
-			if q, ok := convQueues[convID]; ok {
-				return q
+			if state, ok := convQueues[convID]; ok {
+				return state
 			}
 			q := make(chan convMsg, 32) // buffer up to 32 pending turns per conversation
-			convQueues[convID] = q
+			state := &convState{queue: q}
+			convQueues[convID] = state
 			go func() {
 				for cm := range q {
 					// PD3: send placeholder immediately (when edit_in_place enabled)
@@ -878,8 +923,12 @@ func run(ctx context.Context, safeMode bool) error {
 					}
 				}
 
-				callCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-					callCtx = scheduletool.WithDelivery(callCtx, cm.msg.ChannelID, cm.msg.UserID)
+				// Create a per-turn cancellable context. The router goroutine may call
+					// cancelCurrentTurn(state) at any time, which propagates through turnCtx
+					// to the LLM call, any exec subprocess, and any spawned workers.
+					turnCtx, turnCancel := context.WithTimeout(ctx, 5*time.Minute)
+					setTurnCancel(state, turnCancel)
+					callCtx := scheduletool.WithDelivery(turnCtx, cm.msg.ChannelID, cm.msg.UserID)
 					// Inject token usage accumulator so agent loop writes to it.
 					callCtx, tokenUsage := agent.WithTokenUsage(callCtx)
 					// Give set_config tool the current conversation context.
@@ -887,7 +936,8 @@ func run(ctx context.Context, safeMode bool) error {
 						sct.SetCallContext(cm.msg.ChannelID, cm.msg.UserID)
 					}
 					resp, runErr := agentLoop.Run(callCtx, cm.sess, cm.msg)
-					cancel()
+					setTurnCancel(state, nil) // clear: turn complete
+					turnCancel()
 					// Record token usage for this turn.
 					if tokenUsage.PromptTokens > 0 || tokenUsage.CompletionTokens > 0 {
 						_, _ = db.ExecContext(ctx,
@@ -913,12 +963,20 @@ func run(ctx context.Context, safeMode bool) error {
 					}
 
 					if runErr != nil {
-						slog.Error("chandrad: agent loop error",
-							"conversation", convID, "err", runErr)
-						// Edit the placeholder to show the error rather than leaving "…"
-						if placeholderID != "" {
-							_ = discordDC.Edit(ctx, cm.msg.ChannelID, placeholderID,
-								"⚠️ Something went wrong — please try again.")
+						if errors.Is(runErr, context.Canceled) {
+							// Cancelled by safety interrupt — show stop indicator, not generic error.
+							slog.Info("chandrad: turn cancelled by safety interrupt",
+								"conversation", convID)
+							if placeholderID != "" {
+								_ = discordDC.Edit(ctx, cm.msg.ChannelID, placeholderID, "🛑 Cancelled.")
+							}
+						} else {
+							slog.Error("chandrad: agent loop error",
+								"conversation", convID, "err", runErr)
+							if placeholderID != "" {
+								_ = discordDC.Edit(ctx, cm.msg.ChannelID, placeholderID,
+									"⚠️ Something went wrong — please try again.")
+							}
 						}
 						continue
 					}
@@ -955,7 +1013,7 @@ func run(ctx context.Context, safeMode bool) error {
 				delete(convQueues, convID)
 				convMu.Unlock()
 			}()
-			return q
+			return state
 		}
 
 		// Router goroutine: authenticates, gets/creates session, fans into per-conv queue.
@@ -963,8 +1021,8 @@ func run(ctx context.Context, safeMode bool) error {
 			defer func() {
 				// Drain and close all conversation queues on shutdown.
 				convMu.Lock()
-				for _, q := range convQueues {
-					close(q)
+				for _, state := range convQueues {
+					close(state.queue)
 				}
 				convMu.Unlock()
 			}()
@@ -1079,6 +1137,32 @@ func run(ctx context.Context, safeMode bool) error {
 						}
 					}
 
+					// Safety interrupt: stop/cancel signals are handled at the router
+					// level so they fire even when the conv worker is blocked mid-turn.
+					// Cancel the in-flight turn, drain pending turns, reply immediately.
+					if isStopSignal(msg.Content) {
+						convMu.Lock()
+						state, active := convQueues[msg.ConversationID]
+						convMu.Unlock()
+						if active {
+							cancelCurrentTurn(state)
+							for {
+								select {
+								case <-state.queue:
+								default:
+									goto stopDrained
+								}
+							}
+						stopDrained:
+						}
+						_, _ = discordDC.Send(ctx, channels.OutboundMessage{
+							ChannelID: msg.ChannelID,
+							Content:   "🛑 Stopped.",
+							ReplyToID: msg.ID,
+						})
+						continue
+					}
+
 					sess, sessErr := sessionMgr.GetOrCreate(ctx, msg.ConversationID, msg.ChannelID, msg.UserID)
 					if sessErr != nil {
 						slog.Error("chandrad: discord: session error", "err", sessErr)
@@ -1089,9 +1173,9 @@ func run(ctx context.Context, safeMode bool) error {
 						continue
 					}
 
-					q := ensureWorker(msg.ConversationID)
+					state := ensureWorker(msg.ConversationID)
 					select {
-					case q <- convMsg{sess: sess, msg: msg}:
+					case state.queue <- convMsg{sess: sess, msg: msg}:
 					default:
 						slog.Warn("chandrad: discord: conversation queue full, dropping message",
 							"conversation", msg.ConversationID)
