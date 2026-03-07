@@ -117,6 +117,19 @@ chandra daemon restart
 
 It backs up the binary before re-execing. **Do not use for code deployments** — use chandrad-update instead.
 
+## Self-diagnosis
+
+When you notice something wrong in your own output that looks like a code bug — wrong timestamps, garbled text, unexpected behavior — **check your own source first** before reporting or asking for help.
+
+The pattern:
+1. Identify the affected tool or handler from the output (e.g.  returning year 58150 → timestamp formatting bug)
+2. Find the relevant source file: 
+3. Read the file: 
+4. Identify the bug and propose or apply the fix
+5. Build → test → deploy
+
+You have full source access. Use it. A self-diagnosed and self-fixed bug is better than an escalation.
+
 ## Git workflow
 
 ```bash
