@@ -26,6 +26,8 @@ import (
 	approvals "github.com/jrimmer/chandra/internal/approvals"
 	filesystemtool "github.com/jrimmer/chandra/internal/tools/filesystem"
 	shelltool "github.com/jrimmer/chandra/internal/tools/shell"
+	workertool "github.com/jrimmer/chandra/internal/tools/workertool"
+	"github.com/jrimmer/chandra/internal/agent/worker"
 	"github.com/jrimmer/chandra/internal/agent"
 	"github.com/jrimmer/chandra/internal/api"
 	"github.com/jrimmer/chandra/internal/budget"
@@ -375,6 +377,18 @@ func run(ctx context.Context, safeMode bool) error {
 		slog.Warn("chandrad: register write_skill failed", "err", err)
 	}
 
+	// Worker-safe registry: subset of tools that workers are permitted to use.
+	// Excludes: spawn_agent, await_agents, set_config, write_skill,
+	// note_context, forget_context, schedule_reminder — no recursive spawning,
+	// no config/memory mutation, no intent creation from workers.
+	workerRegistry, _ := tools.NewRegistry(nil)
+	for _, name := range []string{"exec", "read_file", "write_file", "web_search", "get_current_time", "read_skill"} {
+		if t, ok := registry.Get(name); ok {
+			_ = workerRegistry.Register(t)
+		}
+	}
+	workerExec := tools.NewExecutor(workerRegistry, db, toolTimeout)
+
 	// Register operator tools (set_config, list_conversations, get_usage_stats).
 	setConfigTool := operatortool.NewSetConfigTool(cfg, cfgPath, db)
 	if err := registry.Register(setConfigTool); err != nil {
@@ -414,6 +428,15 @@ func run(ctx context.Context, safeMode bool) error {
 		}
 	} else {
 		slog.Warn("chandrad: no provider configured, agent loop will not be available")
+	}
+
+	// Worker pool: created here so chatProvider is guaranteed to be initialized.
+	workerPool := worker.NewPool(chatProvider, workerExec, workerRegistry.All(), 3)
+	if err := registry.Register(workertool.NewSpawnAgentTool(workerPool)); err != nil {
+		slog.Warn("chandrad: register spawn_agent failed", "err", err)
+	}
+	if err := registry.Register(workertool.NewAwaitAgentsTool(workerPool)); err != nil {
+		slog.Warn("chandrad: register await_agents failed", "err", err)
 	}
 
 	// Context Budget Manager.
