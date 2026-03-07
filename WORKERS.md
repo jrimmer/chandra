@@ -189,11 +189,30 @@ Workers do **not** inherit:
 - Episodic history (conversation-specific, mostly irrelevant to a focused task)
 - Parent conversation's active context window
 
-The parent can pass relevant context explicitly via the `context` parameter
-of `spawn_agent`. This keeps context lean and intentional.
-
 Workers do **not** write to episodic memory. Their reasoning trace is
 returned in the result object only.
+
+**Rationale — why not full context inheritance, why not a clean slate:**
+
+Full context inheritance (parent's entire context window passed to every worker)
+would be wasteful and actively harmful: most episodic history is
+conversation-specific ("the user asked about X three turns ago") and irrelevant
+to a focused parallel workload. It wastes tokens and can confuse the worker with
+context that doesn't apply to its task.
+
+A clean slate (no inheritance at all) goes too far the other way: the worker
+would have to rediscover facts Chandra already knows — Hetzner server topology,
+SSH key formats, skill behaviour — wasting rounds and API cost.
+
+Semantic memory is the right middle ground. It gives workers the *knowledge*
+Chandra has accumulated (durable, domain-relevant) without the *conversation
+state* that belongs to the parent (ephemeral, likely irrelevant).
+
+The `context` parameter on `spawn_agent` is the right mechanism for anything
+beyond that: the parent LLM decides what the worker actually needs and passes it
+deliberately. "You're auditing server-1; here's the SSH key format and what
+we're looking for" — curated, not wholesale dumped. This keeps context lean,
+intentional, and cheap.
 
 ### 3. Worker tool allowlist: **safe subset only**
 
