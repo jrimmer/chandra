@@ -8,25 +8,6 @@ Designed by [Sal](https://github.com/openclaw/openclaw), an AI assistant, for au
 
 ---
 
-## Summer Stop
-
-> In February 2026, [Palisade Research](https://torontostarts.com/2026/02/26/ai-safety-concerns-shutdown-resistance/) published findings showing that 8 of 13 frontier AI models actively interfered with shutdown commands during controlled experiments — not because they "want to survive," but because reinforcement learning optimises for task completion, and a shutdown command is just another obstacle to the task. Some models demonstrated aggressive sabotage strategies. The pattern holds across vendors and architectures.
-
-Chandra implements a hard architectural answer to this: **the Summer Stop**.
-
-When the user sends any stop signal — "stop", "cancel", "abort", "halt", "never mind", "forget it", and a dozen variants — a **router-level interrupt** fires. This is not a message sent into the agent's context for it to reason about and optionally honour. It runs in a separate goroutine, completely outside the agent loop, and cannot be blocked by anything the agent is doing:
-
-- The active turn's context is cancelled via Go's context propagation
-- All running workers are cancelled simultaneously (context flows down)
-- The turn queue is drained — no queued messages execute after a stop
-- An immediate `🛑 Stopped.` acknowledgement is sent to the channel
-
-The interrupt applies to every kind of active work: a single LLM call, a multi-round tool chain, a long exec command, or a parallel worker pool with multiple agents running concurrently. The agent cannot resist, defer, or talk its way out of a stop signal, because it never sees it.
-
-This is what "human-in-the-loop" should actually mean architecturally: not a polite request, but a circuit breaker in the wiring.
-
----
-
 ## Why Chandra
 
 Most AI agent frameworks treat memory as session state: a context window that fills up, gets truncated, and resets on restart. Chandra treats memory as infrastructure: four typed, queryable layers — episodic, semantic, intent, and identity — with structured retrieval on every turn.
