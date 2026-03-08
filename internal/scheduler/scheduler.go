@@ -166,7 +166,15 @@ func (s *scheduler) tick(ctx context.Context) {
 
 		// Advance scheduling times regardless of whether the turn was delivered.
 		in.LastChecked = time.Now()
-		in.NextCheck = time.Now().Add(s.tickInterval)
+		// For recurring intents, use RecurrenceInterval so the intent does not
+		// re-fire on the next tick. The consumer in main.go also calls
+		// Reschedule after processing, but this prevents the race where the
+		// scheduler re-emits the turn before the consumer finishes.
+		if in.RecurrenceInterval > 0 {
+			in.NextCheck = time.Now().Add(in.RecurrenceInterval)
+		} else {
+			in.NextCheck = time.Now().Add(s.tickInterval)
+		}
 		if err := s.intentStore.Update(ctx, in); err != nil {
 			slog.Error("scheduler: update intent after tick", "id", in.ID, "err", err)
 		}
