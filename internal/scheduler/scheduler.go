@@ -142,7 +142,12 @@ func (s *scheduler) tick(ctx context.Context) {
 				slog.Debug("scheduler: gate suppressed intent", "id", in.ID, "condition", in.Condition)
 				// Reschedule without firing so it checks again next tick.
 				in.LastChecked = time.Now()
-				in.NextCheck = time.Now().Add(s.tickInterval)
+				// FIX: Use RecurrenceInterval if available, else tickInterval
+				nextInterval := s.tickInterval
+				if in.RecurrenceInterval > 0 {
+					nextInterval = in.RecurrenceInterval
+				}
+				in.NextCheck = time.Now().Add(nextInterval)
 				_ = s.intentStore.Update(ctx, in)
 				continue
 			}
@@ -166,15 +171,12 @@ func (s *scheduler) tick(ctx context.Context) {
 
 		// Advance scheduling times regardless of whether the turn was delivered.
 		in.LastChecked = time.Now()
-		// For recurring intents, use RecurrenceInterval so the intent does not
-		// re-fire on the next tick. The consumer in main.go also calls
-		// Reschedule after processing, but this prevents the race where the
-		// scheduler re-emits the turn before the consumer finishes.
+		// FIX: Use RecurrenceInterval if available, else tickInterval
+		nextInterval := s.tickInterval
 		if in.RecurrenceInterval > 0 {
-			in.NextCheck = time.Now().Add(in.RecurrenceInterval)
-		} else {
-			in.NextCheck = time.Now().Add(s.tickInterval)
+			nextInterval = in.RecurrenceInterval
 		}
+		in.NextCheck = time.Now().Add(nextInterval)
 		if err := s.intentStore.Update(ctx, in); err != nil {
 			slog.Error("scheduler: update intent after tick", "id", in.ID, "err", err)
 		}
