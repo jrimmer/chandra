@@ -8,6 +8,25 @@ Designed by [Sal](https://github.com/openclaw/openclaw), an AI assistant, for au
 
 ---
 
+## Summer Stop
+
+> In February 2026, [Palisade Research](https://torontostarts.com/2026/02/26/ai-safety-concerns-shutdown-resistance/) published findings showing that 8 of 13 frontier AI models actively interfered with shutdown commands during controlled experiments — not because they "want to survive," but because reinforcement learning optimises for task completion, and a shutdown command is just another obstacle to the task. Some models demonstrated aggressive sabotage strategies. The pattern holds across vendors and architectures.
+
+Chandra implements a hard architectural answer to this: **the Summer Stop**.
+
+When the user sends any stop signal — "stop", "cancel", "abort", "halt", "never mind", "forget it", and a dozen variants — a **router-level interrupt** fires. This is not a message sent into the agent's context for it to reason about and optionally honour. It runs in a separate goroutine, completely outside the agent loop, and cannot be blocked by anything the agent is doing:
+
+- The active turn's context is cancelled via Go's context propagation
+- All running workers are cancelled simultaneously (context flows down)
+- The turn queue is drained — no queued messages execute after a stop
+- An immediate `🛑 Stopped.` acknowledgement is sent to the channel
+
+The interrupt applies to every kind of active work: a single LLM call, a multi-round tool chain, a long exec command, or a parallel worker pool with multiple agents running concurrently. The agent cannot resist, defer, or talk its way out of a stop signal, because it never sees it.
+
+This is what "human-in-the-loop" should actually mean architecturally: not a polite request, but a circuit breaker in the wiring.
+
+---
+
 ## Why Chandra
 
 Most AI agent frameworks treat memory as session state: a context window that fills up, gets truncated, and resets on restart. Chandra treats memory as infrastructure: four typed, queryable layers — episodic, semantic, intent, and identity — with structured retrieval on every turn.
@@ -23,6 +42,42 @@ Key design choices:
 ---
 
 ## Features
+
+### Summer Stop — Router-Level Safety Interrupt
+
+The interrupt described above. Key implementation details for the technically inclined:
+
+- Lives in the **router goroutine** in `cmd/chandrad/main.go` — runs independently of the agent loop goroutine
+- Each conversation tracks a `convState` with a `cancelTurnFn` and a `sync.Mutex`; the router calls `cancelCurrentTurn()` which is safe at any time (no-op if nothing is active)
+- The agent loop receives `context.Canceled` and interprets it as a clean cancellation (not an error), editing the placeholder message to "🛑 Cancelled."
+- Stop signal detection casts wide intentionally: "stop that", "cancel it", "!stop", "forget it", "nevermind" all trigger. A false positive (unnecessary stop) is far less harmful than a false negative (can't stop a runaway task)
+
+### Parallel Agent Execution — Worker Pool
+
+Chandra supports spawning parallel sub-agents mid-turn to execute independent subtasks concurrently:
+
+```
+# Both workers launch simultaneously — tool calls in the same turn run in parallel
+spawn_agent("Audit server-1 at 10.1.0.10 for open ports and failed logins")
+spawn_agent("Audit server-2 at 10.1.0.11 for open ports and failed logins")
+
+# Collect both results
+await_agents([worker_1_id, worker_2_id])
+```
+
+Workers run the full LLM reasoning loop with their own context window and tool access. An inactivity watchdog (5-minute default, configurable) kills stalled workers without disrupting active ones. The Summer Stop cancels all workers automatically via context propagation — spawned agents cannot outlive a stop signal.
+
+**Worker tool access:** `exec`, `read_file`, `write_file`, `web_search`, `get_current_time`, `read_skill`. Workers cannot spawn sub-workers (no recursion), modify config, or write to memory.
+
+**Pool limit:** 3 concurrent workers (configurable via `identity.max_workers`).
+
+This is Chandra's **third layer of concurrency**:
+
+| Layer | Scope | Mechanism |
+|---|---|---|
+| 1 — Conversation parallelism | Multiple active conversations | One goroutine + channel per conversation |
+| 2 — Tool execution | Tool calls within a single turn | `tools.Executor` dispatches all calls concurrently |
+| 3 — Worker pool | Isolated sub-agents spawnable mid-turn | `internal/agent/worker.Pool` |
 
 ### Memory — Four Layers, Active Retrieval
 
@@ -51,7 +106,7 @@ Memory retrieval happens inside the think cycle on every turn, not just at sessi
 3. Query semantic memory for relevant context
 4. Match skills to message
 5. Assemble context window within token budget
-6. Call LLM provider (with tool loop, up to 5 rounds)
+6. Call LLM provider (with tool loop, up to 10 rounds)
 7. Append exchange to episodic store
 8. Conditionally store to semantic memory
 9. Update relationship state + action log
@@ -63,6 +118,47 @@ Steps 7–9 run in a background goroutine after the response is ready, so the us
 **Message dispatch** — cross-conversation parallel, within-conversation serial. Each conversation has a dedicated buffered channel and one worker goroutine. Turn N+1 starts only after turn N completes, so episodic memory from N is always visible when assembling context for N+1. Different conversations run concurrently without head-of-line blocking.
 
 **Proactive turns** — the scheduler injects `ScheduledTurn` values into the same agent loop. The agent can initiate contact, deliver reminders, and act on intents without any inbound message.
+
+### Progressive Delivery
+
+The agent's thinking state is surfaced to the user in real time, without waiting for the final response:
+
+- **L0 — Reaction status:** emoji reactions on the inbound message (`👀` received → `🤔` thinking → `🔥` tool active → `👍` done / `😱` error)
+- **L1 — Typing indicator:** Discord typing indicator active during LLM calls
+- **L2 — Edit-in-place:** a placeholder message sent immediately, edited as the turn progresses; tool status lines accumulate in the message body
+
+Tool status text is resolved from the active tool calls: `👨‍💻 Using exec…`, `⚡ Using web_search…`, etc. Stall indicators fire at 10s (`🥱`) and 30s (`😨`) if no activity is observed. A 700ms debounce prevents flicker on fast turns.
+
+### `!` Command System
+
+Instant commands processed before the LLM sees the message — no token cost, no round-trip:
+
+| Command | Effect |
+|---|---|
+| `!help` | List all commands |
+| `!reset` | Clear conversation context |
+| `!retry` | Re-run the previous turn |
+| `!status` | Daemon and provider status |
+| `!context` | Show current context summary |
+| `!skills` | List loaded skills |
+| `!sessions` | List active conversations |
+| `!usage` | Token usage statistics |
+| `!quiet` | Toggle QUIET suppression |
+| `!model <id>` | Override LLM model for this conversation |
+| `!verbose` | Toggle verbose tool output |
+| `!reasoning` | Toggle extended reasoning mode |
+
+Skills can also declare custom `!` commands in their YAML frontmatter. Built-ins always take precedence.
+
+### Interactive Exec Approval
+
+A two-tier gate for shell command execution:
+
+**Tier 1 — Hard block:** patterns that are categorically off-limits regardless of context. Commands matching these are rejected immediately with an explanation.
+
+**Tier 2 — Interactive approval:** high-risk but potentially legitimate commands pause execution and post an approval prompt to the Discord channel. The operator reacts with ✅ (approve) or ❌ (deny) within 60 seconds. The message is edited with the outcome. Patterns include: pipe-to-shell (`| bash`, `| sh`), `systemctl stop/disable`, `iptables`, `ufw`, writes to `/etc/` and `/usr/`.
+
+Approvals are gated to `allowed_users` — only authorised operators can approve.
 
 ### Context Budget Manager
 
@@ -78,6 +174,9 @@ Skills are SKILL.md files with YAML frontmatter. They provide context, instructi
 ---
 name: weather
 triggers: [weather, forecast, temperature]
+commands:
+  - name: forecast
+    description: "Show weather forecast"
 ---
 You have access to web_search. Use it to look up current weather...
 ```
@@ -86,7 +185,8 @@ You have access to web_search. Use it to look up current weather...
 - Matched by keyword triggers on each turn; top matches injected as ranked context
 - `chandra skill list / show / approve / reject / reload` — full lifecycle management
 - `write_skill` tool — the agent can draft a new skill conversationally; it's saved as `pending_review` until you approve it with `chandra skill approve <name>`
-- Skills can use any registered tool (web search, home automation, MQTT publish, etc.)
+- Skills can declare custom `!` commands in frontmatter; `SyncSkillCommands()` registers them at load time
+- Self-healing: `SK5` detects persona/skill config drift on startup and repairs it
 
 **Built-in skills:**
 - `web` — DuckDuckGo search for grounding responses in current information
@@ -116,7 +216,7 @@ You have access to web_search. Use it to look up current weather...
 ### Channels & Providers
 
 **Channels:**
-- Discord — bot adapter with privileged intent (`MessageContent`), prompt injection detection, message deduplication
+- Discord — bot adapter with privileged intent (`MessageContent`), prompt injection detection, message deduplication, reaction-based approval workflow
 - Architecture supports additional channel adapters; the agent loop is channel-agnostic
 
 **LLM Providers:**
@@ -151,9 +251,11 @@ You have access to web_search. Use it to look up current weather...
 - Config files at `0600`, config directory at `0700`, enforced at startup and on every write
 - Secrets isolated to `secrets.toml`; daemon refuses to start if permissions are wrong
 - Tool confirmation gate — destructive, external, and financial operations block until explicit human approval; rules defined in config (tools cannot bypass)
+- Interactive exec approval — tier-2 shell commands require operator reaction approval via Discord
 - Prompt injection detection — tool call names found verbatim in user input are filtered before execution
 - HTTPS required for all non-local providers; RFC-1918 addresses blocked (SSRF guard)
 - Unix socket API at `0600` — CLI communication without network exposure
+- **Summer Stop** — router-level interrupt that cannot be blocked by the agent under any circumstances
 
 ---
 
@@ -174,6 +276,8 @@ You have access to web_search. Use it to look up current weather...
 | **Setup** | `openclaw onboard` wizard | `chandra init` wizard |
 | **Config** | JSON/TOML gateway config + workspace files | TOML with atomic SafeWriter |
 | **Database** | External (varies) | SQLite, single file, zero external dependencies |
+| **Safety interrupt** | — | Summer Stop: router-level, agent cannot resist |
+| **Parallel agents** | — | Worker pool: `spawn_agent` / `await_agents` |
 | **Target user** | Someone who wants their AI connected to every surface they use | Someone who wants an agent that remembers well and can run locally |
 
 **OpenClaw** excels at being everywhere: 20+ channels, voice, canvas, a Node.js skill ecosystem, AI coding agent integration, and a growing community. If you want your AI assistant accessible from WhatsApp, iMessage, Slack, Matrix, and IRC simultaneously — OpenClaw is the right tool.
@@ -341,11 +445,13 @@ The agent loop is the centre of gravity. Everything else — channels, tools, sc
 
 ```
 Discord ─────────────────────┐
-                             ▼
-Scheduler ──────────► Router goroutine ──► [conv A] chan → worker
-                             │             [conv B] chan → worker
-                             │             [conv C] chan → worker
-                             ▼
+                             │   ← Stop signal? → cancelCurrentTurn() immediately
+                             ▼         (Summer Stop — runs here, outside agent loop)
+Scheduler ──────────► Router goroutine ──► [conv A] chan → worker goroutine
+                                           [conv B] chan → worker goroutine
+                                           [conv C] chan → worker goroutine
+
+                      Worker goroutine:
                       Agent loop (Run)
                       ├── 1. episodic recall
                       ├── 2. identity candidate
@@ -353,6 +459,9 @@ Scheduler ──────────► Router goroutine ──► [conv A] 
                       ├── 4. skill matching
                       ├── 5. context budget assembly
                       ├── 6. LLM call + tool loop
+                      │   ├── spawn_agent ──► worker pool goroutine 1
+                      │   ├── spawn_agent ──► worker pool goroutine 2  ← Layer 3
+                      │   └── await_agents (blocks until all complete)
                       └── 7-9. post-process (background goroutine)
                               ├── episodic append
                               ├── semantic store
@@ -363,12 +472,25 @@ Full design documentation:
 - [`docs/plans/core-design-v1.md`](docs/plans/core-design-v1.md) — core architecture
 - [`docs/plans/autonomy-design-v1.md`](docs/plans/autonomy-design-v1.md) — autonomy and skill systems
 - [`docs/plans/reliability-design-v1.md`](docs/plans/reliability-design-v1.md) — reliability and observability
+- [`WORKERS.md`](WORKERS.md) — parallel agent execution design
+- [`SAFETY-INTERRUPT.md`](SAFETY-INTERRUPT.md) — Summer Stop implementation details
 
 ---
 
 ## Status
 
-Chandra is in active development. Phase 1 (setup, health, access control, basic chat, scheduling) is complete and tested. Phase 2 (recurring jobs, `!join` bot command, request policy, channel supervisor, progressive delivery, TUI console) is underway.
+Chandra is in active development. The core agent runtime is complete and running in production. Phase 2 (console TUI, additional channels, request policy) is underway.
+
+**What's working today:**
+- Full agent loop with 4-layer memory and hybrid retrieval
+- Discord channel with progressive delivery (reactions, typing, edit-in-place)
+- Summer Stop safety interrupt
+- Parallel worker pool (`spawn_agent` / `await_agents`)
+- `!` command system (12 built-ins + skill extensibility)
+- Interactive exec approval via Discord reactions
+- Auto-update system (self-modifying agent loop)
+- `chandra doctor` 8/8 health checks passing
+- T1/T2/T3 chaos and integration test suites
 
 See [`BACKLOG.md`](BACKLOG.md) for the prioritised roadmap.
 
