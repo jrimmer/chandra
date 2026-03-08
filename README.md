@@ -302,19 +302,21 @@ They're also composable: Chandra was originally designed as a companion to OpenC
 - SQLite3 development headers (`libsqlite3-dev` on Debian/Ubuntu)
 - Ollama (for local embeddings) — optional but recommended
 
-### Build
+### Install
+
+```bash
+# Install the latest release
+CGO_ENABLED=1 go install -tags sqlite_fts5 github.com/jrimmer/chandra/cmd/chandrad@latest
+CGO_ENABLED=1 go install -tags sqlite_fts5 github.com/jrimmer/chandra/cmd/chandra@latest
+```
+
+Or build from source:
 
 ```bash
 git clone https://github.com/jrimmer/chandra.git
 cd chandra
 make build          # outputs bin/chandrad and bin/chandra
 sudo make install   # installs to /usr/local/bin
-```
-
-Or manually:
-```bash
-CGO_ENABLED=1 go build -tags sqlite_fts5 -o bin/chandrad ./cmd/chandrad
-CGO_ENABLED=1 go build -tags sqlite_fts5 -o bin/chandra  ./cmd/chandra
 ```
 
 > **Note:** The `sqlite_fts5` build tag enables FTS5 full-text search in go-sqlite3, which powers hybrid BM25+vector memory retrieval. Without it the binary falls back to pure vector search.

@@ -8,6 +8,8 @@
 GO      := go
 TAGS    := sqlite_fts5
 CGO     := CGO_ENABLED=1
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -X main.version=$(VERSION)
 
 BINDIR  := bin
 
@@ -18,10 +20,10 @@ all: build
 build: chandrad chandra
 
 chandrad:
-	$(CGO) $(GO) build -tags "$(TAGS)" -o $(BINDIR)/chandrad ./cmd/chandrad
+	$(CGO) $(GO) build -tags "$(TAGS)" -ldflags "$(LDFLAGS)" -o $(BINDIR)/chandrad ./cmd/chandrad
 
 chandra:
-	$(CGO) $(GO) build -tags "$(TAGS)" -o $(BINDIR)/chandra ./cmd/chandra
+	$(CGO) $(GO) build -tags "$(TAGS)" -ldflags "$(LDFLAGS)" -o $(BINDIR)/chandra ./cmd/chandra
 
 test:
 	$(CGO) $(GO) test -tags "$(TAGS)" ./...

@@ -72,10 +72,14 @@ func call(method string, params any) {
 	fmt.Println(string(out))
 }
 
+// version is set at build time via -ldflags "-X main.version=..."
+var version = "dev"
+
 // rootCmd is the top-level chandra command.
 var rootCmd = &cobra.Command{
-	Use:   "chandra",
-	Short: "Chandra AI agent CLI",
+	Use:     "chandra",
+	Short:   "Chandra AI agent CLI",
+	Version: version,
 	Long:  "chandra is the command-line interface for the Chandra AI agent daemon (chandrad).",
 	// RunE fires when chandra is invoked with no subcommand. If no config
 	// exists we nudge the user toward chandra init; otherwise show help.

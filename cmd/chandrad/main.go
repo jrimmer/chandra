@@ -63,7 +63,9 @@ import (
 	webskill "github.com/jrimmer/chandra/skills/web"
 )
 
-const version = "v1"
+// version is set at build time via -ldflags "-X main.version=..."
+// Falls back to "dev" when built without ldflags.
+var version = "dev"
 
 func main() {
 	safeMode := flag.Bool("safe", false, "start in safe mode (minimal config, no external connections)")
