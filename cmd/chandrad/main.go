@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"regexp"
 	"strings"
 	"sync"
 	"path/filepath"
@@ -693,12 +694,13 @@ func run(ctx context.Context, safeMode bool) error {
 						slog.Error("scheduled turn failed", "intent", turn.IntentID, "err", schedErr)
 					} else {
 						// Deliver the response to the originating Discord channel.
-						// "QUIET" response means the agent checked but found nothing to say.
-						// Also suppress if the last non-empty line is QUIET — model sometimes
-						// generates a brief summary then appends QUIET on its own line.
-						isQuiet := isQUIETResponse(resp)
-						if resp != "" && !isQuiet && turn.ChannelID != "" && discordDC != nil {
-							for _, chunk := range chunkMessage(resp, 1900) {
+						// Suppress if the response contains the QUIET signal anywhere —
+						// models sometimes generate commentary around it. For scheduled
+						// turns, any mention of the suppression signal means "nothing to
+						// say". Strip the signal and deliver only if meaningful text remains.
+						cleaned, wasQuiet := stripQuietSignal(resp)
+						if cleaned != "" && !wasQuiet && turn.ChannelID != "" && discordDC != nil {
+							for _, chunk := range chunkMessage(cleaned, 1900) {
 							_, _ = discordDC.Send(ctx, channels.OutboundMessage{
 								ChannelID: turn.ChannelID,
 								Content:   chunk,
@@ -2362,37 +2364,40 @@ func registeredToolNames(reg tools.Registry) map[string]bool {
 
 // chunkMessage splits text into Discord-safe segments of at most maxLen runes,
 // splitting on newline boundaries where possible.
-// isQUIETResponse returns true if the response should be suppressed.
-// Handles:
-//   - Exact QUIET / QUICK (case-insensitive)
-//   - Last non-empty line == QUIET (e.g. summary then newline then QUIET)
-//   - Last whitespace-separated token == QUIET (e.g. "No commits.    QUIET")
-func isQUIETResponse(resp string) bool {
-	isSignal := func(s string) bool {
-		upper := strings.ToUpper(strings.TrimSpace(s))
-		return upper == "QUIET" || upper == "QUICK" // QUICK is a known Kimi typo
-	}
+// stripQuietSignal checks for the QUIET suppression signal in a scheduled turn
+// response. Returns the cleaned text (with signal removed) and whether the
+// signal was found. For scheduled turns, any presence of QUIET means the model
+// intended to suppress — even if it added commentary around it.
+//
+// Handles: exact match, last-line, embedded bold (**QUIET**), inline token.
+func stripQuietSignal(resp string) (cleaned string, wasQuiet bool) {
 	trimmed := strings.TrimSpace(resp)
-	if isSignal(trimmed) {
-		return true
+	if trimmed == "" {
+		return "", false
 	}
-	// Check last non-empty line.
-	lines := strings.Split(trimmed, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		if l := strings.TrimSpace(lines[i]); l != "" {
-			if isSignal(l) {
-				return true
-			}
-			// Also check last whitespace-separated token on that line
-			// (catches "No new commits — d88d146 is current.    QUIET").
-			fields := strings.Fields(l)
-			if len(fields) > 0 && isSignal(fields[len(fields)-1]) {
-				return true
-			}
-			break
+
+	// Check if the entire response is just the signal.
+	upper := strings.ToUpper(trimmed)
+	if upper == "QUIET" || upper == "QUICK" || upper == "**QUIET**" {
+		return "", true
+	}
+
+	// Check if QUIET appears anywhere (case-insensitive). If so, strip it
+	// and check whether meaningful content remains.
+	quietRe := regexp.MustCompile(`(?i)\*{0,2}QUIE?T\*{0,2}`)
+	if quietRe.MatchString(trimmed) {
+		stripped := strings.TrimSpace(quietRe.ReplaceAllString(trimmed, ""))
+		// If nothing meaningful remains after stripping, suppress entirely.
+		if stripped == "" || stripped == "—" || stripped == "-" || stripped == "." {
+			return "", true
 		}
+		// Signal was present but there was other content — still suppress.
+		// The model said QUIET, so it intended to be silent. The extra text
+		// is commentary that should not be delivered.
+		return "", true
 	}
-	return false
+
+	return trimmed, false
 }
 
 func chunkMessage(text string, maxLen int) []string {

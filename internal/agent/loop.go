@@ -431,12 +431,17 @@ func (l *agentLoop) RunScheduled(ctx context.Context, turn scheduler.ScheduledTu
 		return "", fmt.Errorf("agent/loop: RunScheduled: get session: %w", err)
 	}
 
-	// Wrap the scheduled prompt so the LLM delivers it as a reminder rather
-	// than treating it as a new user-initiated conversation. The instruction
-	// is kept terse to avoid inflating the context window.
-	prompt := "[SCHEDULED REMINDER] Deliver this reminder to the user now. " +
-		"Be brief and natural — one or two sentences max. Do not add caveats " +
-		"or discuss conversation history. Reminder: " + turn.Prompt
+	// Wrap the scheduled prompt so the LLM treats it as a proactive check,
+	// not a user-initiated conversation. The framing explicitly tells the
+	// model there is NO user message to prevent confabulation of fake requests.
+	prompt := "[SCHEDULED TURN — NO USER MESSAGE]\n" +
+		"This is an automated scheduled turn. There is NO user message. " +
+		"Do NOT fabricate, invent, or hallucinate any user request. " +
+		"Do NOT claim the user said anything.\n" +
+		"Execute the following task, then either deliver a brief useful " +
+		"response (one or two sentences) or respond with exactly QUIET " +
+		"if there is nothing to report.\n" +
+		"Task: " + turn.Prompt
 	msg := channels.InboundMessage{
 		ConversationID: convID,
 		UserID:         userID,
