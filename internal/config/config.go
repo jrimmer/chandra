@@ -75,7 +75,7 @@ type DiscordConfig struct {
 	BotToken        string   `toml:"bot_token"`
 	ChannelIDs      []string `toml:"channel_ids"`
 	AccessPolicy    string   `toml:"access_policy"`   // invite | request | role | allowlist | open
-	RequireMention  bool     `toml:"require_mention"` // only respond when @mentioned or replied-to (default true) // invite | request | role | allowlist | open
+	RequireMention  *bool    `toml:"require_mention"` // only respond when @mentioned or replied-to; nil/unset = true (default on)
 	AllowedUsers  []string `toml:"allowed_users"`
 	AllowedGuilds []string `toml:"allowed_guilds"`
 	AllowedRoles  []string `toml:"allowed_roles"`

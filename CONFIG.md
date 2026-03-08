@@ -213,7 +213,7 @@ MQTT enables external events (device state, webhooks, monitoring alerts) to trig
 | `bot_token` | string | — | **Required.** Discord bot token with `MESSAGE CONTENT` privileged intent enabled. Format: `Bot MTQ...`. Store in `secrets.toml`. |
 | `channel_ids` | string[] | — | **Required.** Discord channel IDs the bot listens to. Messages from other channels are silently dropped. |
 | `access_policy` | string | `"invite"` | Access control mode: `invite` (require invite code), `allowlist` (explicit user list), `open` (anyone in the channel). `open` is strongly discouraged in production. |
-| `require_mention` | bool | `false`* | When `true`, the bot only responds when directly `@mentioned` or when replying to a bot message. **Set to `true` for production** — `false` is for testing only and causes the bot to respond to every message in the channel. |
+| `require_mention` | *bool | `true` | When `true`, the bot only responds when directly @mentioned or when replying to a bot message. Default on — omitting the field is the same as `true`. Set `false` explicitly to respond to every message (testing only). |
 | `allowed_users` | string[] | `[]` | Static allowlist of Discord user IDs. Only used when `access_policy = "allowlist"`. An empty list is a **hard error** — the daemon will not start to prevent accidental lock-out. |
 | `allowed_guilds` | string[] | `[]` | Restrict to specific guild IDs. |
 | `allowed_roles` | string[] | `[]` | Restrict to users with specific role IDs. |
@@ -222,7 +222,7 @@ MQTT enables external events (device state, webhooks, monitoring alerts) to trig
 | `reaction_status` | *bool | `true` | Show emoji reaction status on inbound messages during processing: `👀` received → `🤔` thinking → `🔥` tool active → `👍` done / `😱` error. Disable by setting explicitly to `false`. |
 | `edit_in_place` | bool | `false` | Send a placeholder `…` message immediately, then edit it with the final response. Provides faster perceived response time. Recommended for production use. |
 
-*`require_mention` is a plain `bool` field, so Go's zero value (`false`) is indistinguishable from "not set". This is a known issue — the safe default should be `true` but cannot be enforced by the type system. **Always set this field explicitly in your config.**
+
 
 **Production-ready discord config:**
 ```toml

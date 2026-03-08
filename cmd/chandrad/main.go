@@ -1166,16 +1166,12 @@ func run(ctx context.Context, safeMode bool) error {
 						continue
 					}
 
-					// Directedness gate: in guild channels, only respond when the bot is
-					// explicitly @mentioned or the message replies to a bot message.
 					// Directedness gate: only process messages directed at this bot.
-					// Default: on. Disable by setting require_mention = false in config.
-					// BUG NOTE: RequireMention is a bool field; Go's zero value (false) is
-					// indistinguishable from an explicit "false". We work around this by
-					// treating the field as an explicit enable: gate is on unless the field
-					// is explicitly set to false AND the config is non-nil.
-					// TODO: change to *bool pointer in DiscordConfig to allow proper opt-out.
-					requireMention := cfg.Channels.Discord == nil || cfg.Channels.Discord.RequireMention
+					// RequireMention is *bool: nil or true = gate on (default); explicit false = gate off.
+					// Disable only by setting require_mention = false in config.
+					requireMention := cfg.Channels.Discord == nil ||
+						cfg.Channels.Discord.RequireMention == nil ||
+						*cfg.Channels.Discord.RequireMention
 					if requireMention {
 						botMentioned := msg.Meta["bot_mentioned"] == "true"
 						replyToBot := msg.Meta["is_reply_to_bot"] == "true"

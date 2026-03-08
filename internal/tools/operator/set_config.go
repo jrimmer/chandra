@@ -196,8 +196,8 @@ func (t *setConfigTool) currentValue(key string) string {
 	case "provider.embedding_model":
 		return t.cfg.Provider.EmbeddingModel
 	case "channels.discord.require_mention":
-		if t.cfg.Channels.Discord != nil {
-			return strconv.FormatBool(t.cfg.Channels.Discord.RequireMention)
+		if t.cfg.Channels.Discord != nil && t.cfg.Channels.Discord.RequireMention != nil {
+			return strconv.FormatBool(*t.cfg.Channels.Discord.RequireMention)
 		}
 		return "true"
 	case "channels.discord.allow_bots":
@@ -231,7 +231,8 @@ func (t *setConfigTool) applyHot(key, value string) error {
 		t.cfg.Identity.PersonaFile = value
 	case "channels.discord.require_mention":
 		if t.cfg.Channels.Discord != nil {
-			t.cfg.Channels.Discord.RequireMention = value == "true"
+			v := value == "true"
+			t.cfg.Channels.Discord.RequireMention = &v
 		}
 	case "channels.discord.allow_bots":
 		if t.cfg.Channels.Discord != nil {
