@@ -164,7 +164,7 @@ Workers extend Chandra's goroutine-per-conversation model with on-demand isolate
 | I2 | Keychain / secret-service integration — macOS Keychain or Linux D-Bus for `secrets.toml` | P4 | RELIABILITY.md R2 |
 | I3 | Automated service install — `chandrad` as systemd/launchd unit via `chandra init` | P3 | SETUP.md |
 | I4 | Migration tooling — OpenClaw → Chandra memory/config migration | P4 | SETUP.md §14 |
-| I5 | Disk usage monitoring — Chandra proactively alerts when disk exceeds threshold (VM currently at 96%) | P2 | Operational experience |
+| I5 | Disk usage monitoring — Chandra proactively alerts when disk exceeds threshold (useful for any deployment) | P2 | Operational experience |
 
 ---
 
@@ -213,7 +213,7 @@ Workers extend Chandra's goroutine-per-conversation model with on-demand isolate
 | # | Action | Effort |
 |---|--------|--------|
 | V1 | Flip `require_mention = true` (currently false from coherence testing) | 1 min |
-| V2 | Disk usage alert — chandra-test VM at 96% full; add check to heartbeat | 1 hr |
+| V2 | Disk usage alert — add disk usage check to heartbeat skill | 1 hr |
 
 ### Next priorities
 
