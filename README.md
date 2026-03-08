@@ -25,6 +25,23 @@ Key design choices:
 
 ## Features
 
+- [Summer Stop — Router-Level Safety Interrupt](#summer-stop--router-level-safety-interrupt)
+- [Parallel Agent Execution — Worker Pool](#parallel-agent-execution--worker-pool)
+- [Memory — Four Layers, Active Retrieval](#memory--four-layers-active-retrieval)
+- [Agent Runtime](#agent-runtime)
+- [Progressive Delivery](#progressive-delivery)
+- [`!` Command System](#-command-system)
+- [Interactive Exec Approval](#interactive-exec-approval)
+- [Context Budget Manager](#context-budget-manager)
+- [Skills](#skills)
+- [Scheduling & Events](#scheduling--events)
+- [Access Control](#access-control)
+- [Channels & Providers](#channels--providers)
+- [Operations](#operations)
+- [Security](#security)
+
+---
+
 ### Summer Stop — Router-Level Safety Interrupt
 
 The interrupt described above. Key implementation details for the technically inclined:
