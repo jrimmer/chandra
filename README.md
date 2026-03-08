@@ -19,6 +19,7 @@ Key design choices:
 - **Privacy-first embeddings.** Semantic search uses locally-hosted Ollama models by default. No conversation content leaves your machine for the embedding step.
 - **Hybrid memory retrieval.** BM25 full-text search (SQLite FTS5) and vector KNN (sqlite-vec) run concurrently and merge via Reciprocal Rank Fusion. Keyword recall and semantic similarity work together rather than competing.
 - **Proactive by design.** The scheduler injects turns into the agent loop without any inbound message. Chandra can initiate, follow up, and notice things independently.
+- **Goroutine-native parallelism.** Every inbound message spawns an independent goroutine — each conversation is a parallel agent. There is no shared mutable state between conversations, no head-of-line blocking, and no request queue that serialises the whole system. A slow or compute-heavy turn in one conversation does not affect any other. This extends to tool calls (all tool calls within a turn execute concurrently) and to the worker pool (`spawn_agent` launches sub-agents mid-turn, also as goroutines). The result is a runtime that stays responsive under large agent workloads without threads, process pools, or async frameworks — just Go's scheduler doing what it does.
 
 ---
 
