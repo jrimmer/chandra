@@ -227,6 +227,10 @@ You have access to web_search. Use it to look up current weather...
 
 **`chandra confirm <id>`** — approve a pending tool confirmation from the terminal.
 
+**Missed-job recovery** — on startup, the scheduler detects overdue recurring intents (daemon was offline during a scheduled window) and reschedules them with a 5-second stagger. One-shot reminders are untouched and fire on the first tick. Prevents a burst of simultaneous LLM calls when the daemon restarts after downtime.
+
+**Per-user rate limiting** — configurable via `channels.discord.rate_limit_per_minute`. Exceeded messages are dropped silently (no reply, warning logged). Default `0` = unlimited. Recommended: `30` for multi-user deployments.
+
 ### Security
 
 - Config files at `0600`, config directory at `0700`, enforced at startup and on every write
@@ -237,6 +241,8 @@ You have access to web_search. Use it to look up current weather...
 - HTTPS required for all non-local providers; RFC-1918 addresses blocked (SSRF guard)
 - Unix socket API at `0600` — CLI communication without network exposure
 - **Summer Stop** — router-level interrupt that cannot be blocked by the agent under any circumstances
+- Per-user rate limiting — configurable token bucket (default unlimited); protects against accidental loops and multi-user flooding
+- Missed-job recovery — staggered restart prevents LLM call storms after downtime
 
 ---
 
@@ -455,6 +461,7 @@ Full design documentation:
 - [`docs/plans/reliability-design-v1.md`](docs/plans/reliability-design-v1.md) — reliability and observability
 - [`WORKERS.md`](WORKERS.md) — parallel agent execution design
 - [`SAFETY-INTERRUPT.md`](SAFETY-INTERRUPT.md) — Summer Stop implementation details
+- [`CONFIG.md`](CONFIG.md) — complete configuration reference with defaults and recommendations
 
 ---
 
