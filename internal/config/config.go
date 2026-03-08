@@ -80,6 +80,7 @@ type DiscordConfig struct {
 	AllowedGuilds []string `toml:"allowed_guilds"`
 	AllowedRoles  []string `toml:"allowed_roles"`
 	AllowBots       bool     `toml:"allow_bots"`       // allow messages from other bots (testing only)
+	RateLimitPerMinute int  `toml:"rate_limit_per_minute"` // max messages per user per minute (0 = unlimited)
 	ReactionStatus  *bool `toml:"reaction_status"`  // show emoji reactions during processing (default true)
 	EditInPlace     bool     `toml:"edit_in_place"`    // send placeholder then edit with response (default false)
 }

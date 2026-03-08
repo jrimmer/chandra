@@ -28,6 +28,7 @@ import (
 	shelltool "github.com/jrimmer/chandra/internal/tools/shell"
 	workertool "github.com/jrimmer/chandra/internal/tools/workertool"
 	"github.com/jrimmer/chandra/internal/agent/worker"
+	"github.com/jrimmer/chandra/internal/ratelimit"
 	"github.com/jrimmer/chandra/internal/agent"
 	"github.com/jrimmer/chandra/internal/api"
 	"github.com/jrimmer/chandra/internal/budget"
@@ -504,6 +505,15 @@ func run(ctx context.Context, safeMode bool) error {
 		}
 		return count > 0
 	})
+	// Missed-job recovery: reschedule overdue recurring intents with
+	// 5-second stagger to prevent a startup burst of simultaneous LLM calls.
+	// One-shot overdue intents are left alone — they fire on the first tick.
+	if n, recErr := scheduler.RecoverMissedJobs(ctx, inStore, 5*time.Second); recErr != nil {
+		slog.Warn("chandrad: missed-job recovery failed", "err", recErr)
+	} else if n > 0 {
+		slog.Info("chandrad: missed-job recovery complete", "recovered", n)
+	}
+
 	if err := sched.Start(ctx); err != nil {
 		slog.Warn("chandrad: scheduler start failed", "err", err)
 	} else {
@@ -877,6 +887,14 @@ func run(ctx context.Context, safeMode bool) error {
 			return false
 		}
 
+		// Per-user rate limiter: limits messages processed per user per minute.
+		// Configured via channels.discord.rate_limit_per_minute (0 = unlimited).
+		rateLimitPerMin := 0
+		if cfg.Channels.Discord != nil {
+			rateLimitPerMin = cfg.Channels.Discord.RateLimitPerMinute
+		}
+		msgRateLimiter := ratelimit.New(rateLimitPerMin, time.Minute)
+
 		var (
 			convMu     sync.Mutex
 			convQueues = make(map[string]*convState) // key: conversationID
@@ -1138,6 +1156,14 @@ func run(ctx context.Context, safeMode bool) error {
 								"user_id", msg.UserID, "channel_id", msg.ChannelID, "policy", policy)
 							continue
 						}
+					}
+
+					// Per-user rate limiting. Drop silently and log; don't reply to the
+					// user (avoids feedback loops and wasted LLM calls on bursts).
+					if !msgRateLimiter.Allow(msg.UserID) {
+						slog.Warn("chandrad: rate limit exceeded; dropping message",
+							"user_id", msg.UserID, "channel_id", msg.ChannelID)
+						continue
 					}
 
 					// Directedness gate: in guild channels, only respond when the bot is
