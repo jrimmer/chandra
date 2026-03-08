@@ -410,21 +410,20 @@ func (l *agentLoop) RunScheduled(ctx context.Context, turn scheduler.ScheduledTu
 		return "", nil
 	}
 
-	// Use the delivery target channel/user so the session is tied to the right
-	// conversation and episodic context. Fall back to generic scheduler session.
+	// Use an isolated session for scheduled turns so the model does not see
+	// interactive conversation history. This prevents confabulation where the
+	// model invents fake user messages based on recent chat context.
+	// The session ID includes the intent ID for traceability but is separate
+	// from any user-facing conversation.
 	channelID := turn.ChannelID
 	userID := turn.UserID
-	convID := turn.SessionID
 	if channelID == "" {
 		channelID = "scheduler"
 	}
 	if userID == "" {
 		userID = "system"
 	}
-	if channelID != "scheduler" && userID != "system" {
-		// Derive a stable conversation ID from channel+user (same as Discord dispatch).
-		convID = computeConvID(channelID, userID)
-	}
+	convID := "scheduled:" + turn.IntentID
 
 	sess, err := l.cfg.Sessions.GetOrCreate(ctx, convID, channelID, userID)
 	if err != nil {
