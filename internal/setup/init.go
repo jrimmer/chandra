@@ -391,19 +391,59 @@ func Run(ctx context.Context, opts Options) error {
 	// that fits their use case (e.g. "Aria", "Max", "Friday").
 	var agentName, agentDescription string
 	if !cp.IdentityDone {
-		form := huh.NewForm(huh.NewGroup(
+		nameForm := huh.NewForm(huh.NewGroup(
 			huh.NewInput().
 				Title("Name your agent").
 				Description("This is the persona name your agent will use in conversation — not the platform name. E.g. Aria, Max, Friday.").
 				Value(&agentName).
 				Placeholder("e.g. Aria"),
-			huh.NewInput().Title("Brief personality description (optional)").Value(&agentDescription),
 		))
-		if err := form.Run(); err != nil {
+		if err := nameForm.Run(); err != nil {
 			return err
 		}
 		if agentName == "" {
 			agentName = "Assistant"
+		}
+
+		var personalityChoice string
+		personalityForm := huh.NewForm(huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Choose a personality").
+				Description("This shapes how your agent communicates. You can always edit persona.md later.").
+				Options(
+					huh.NewOption("🛠️ Professional — Direct, efficient, no-nonsense. Gets the job done with minimal fuss.", "professional"),
+					huh.NewOption("💬 Friendly — Warm, conversational, approachable. Like a knowledgeable friend.", "friendly"),
+					huh.NewOption("🧠 Analytical — Thorough, precise, detail-oriented. Thinks before acting.", "analytical"),
+					huh.NewOption("✏️ Custom — Write your own personality description.", "custom"),
+				).
+				Value(&personalityChoice),
+		))
+		if err := personalityForm.Run(); err != nil {
+			return err
+		}
+
+		switch personalityChoice {
+		case "professional":
+			agentDescription = "Direct and efficient. Skips pleasantries and gets straight to the point. Values precision and results over process."
+		case "friendly":
+			agentDescription = "Warm and conversational. Explains things clearly and makes technical topics approachable. Encouraging but honest."
+		case "analytical":
+			agentDescription = "Thorough and methodical. Considers edge cases, weighs tradeoffs, and explains reasoning. Prefers depth over speed."
+		case "custom":
+			var customDesc string
+			customForm := huh.NewForm(huh.NewGroup(
+				huh.NewInput().
+					Title("Describe your agent's personality").
+					Placeholder("e.g. Sarcastic but helpful, like a senior engineer who's seen it all").
+					Value(&customDesc),
+			))
+			if err := customForm.Run(); err != nil {
+				return err
+			}
+			agentDescription = customDesc
+		}
+		if agentDescription == "" {
+			agentDescription = "A capable technical partner."
 		}
 		cp.IdentityDone = true
 		cp.AgentName = agentName
