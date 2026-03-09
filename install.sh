@@ -296,10 +296,15 @@ verify_install() {
 
 run_init() {
     step "Setting up Chandra"
-    info "Running 'chandra init' to configure your agent..."
-    printf "\n"
 
-    "$INSTALL_DIR/chandra" init || warn "Init exited with an error — you can re-run 'chandra init' anytime"
+    if [ -t 0 ]; then
+        info "Running 'chandra init' to configure your agent..."
+        printf "\n"
+        "$INSTALL_DIR/chandra" init || warn "Init exited with an error — you can re-run 'chandra init' anytime"
+    else
+        info "Non-interactive shell detected (piped install) — skipping interactive setup"
+        info "Run 'chandra init' in your terminal to configure your agent"
+    fi
 }
 
 # ── Done ────────────────────────────────────────────────────────────────────
@@ -310,7 +315,12 @@ done_message() {
     printf "  │         ✅ Chandra is installed!         │\n"
     printf "  └─────────────────────────────────────────┘\n"
     printf "${RESET}\n"
-    printf "  ${BOLD}Quick start:${RESET}\n"
+    printf "  ${BOLD}Next step:${RESET}\n"
+    if [ ! -t 0 ]; then
+        printf "    ${CYAN}chandra init${RESET}      Configure your agent (run this now!)\n"
+        printf "\n"
+        printf "  ${BOLD}Then:${RESET}\n"
+    fi
     printf "    ${CYAN}chandrad${RESET}          Start the daemon\n"
     printf "    ${CYAN}chandra status${RESET}    Check agent status\n"
     printf "    ${CYAN}chandra init${RESET}      Re-run setup\n"
