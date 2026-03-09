@@ -862,10 +862,12 @@ func runChannelStage(ctx context.Context, discordToken, channelID, accessPolicy 
 	form2 := huh.NewForm(huh.NewGroup(
 		huh.NewInput().
 			Title("Discord bot token").
+			Description("Create one at https://discord.com/developers/applications\n→ New Application → Bot → Reset Token → copy it.\nEnable MESSAGE CONTENT INTENT under Bot → Privileged Gateway Intents.\nInvite with: OAuth2 → URL Generator → bot scope → Send Messages + Read Message History.").
 			EchoMode(huh.EchoModePassword).
 			Value(discordToken),
 		huh.NewInput().
 			Title("Channel ID to post the setup verification message").
+			Description("Right-click a channel in Discord → Copy Channel ID.\n(Enable Developer Mode: Settings → App Settings → Advanced → Developer Mode)").
 			Value(channelID),
 		huh.NewSelect[string]().
 			Title("Who can talk to Chandra on Discord?").
