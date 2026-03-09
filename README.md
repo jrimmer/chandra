@@ -302,17 +302,22 @@ They're also composable: Chandra was originally designed as a companion to OpenC
 - SQLite3 development headers (`libsqlite3-dev` on Debian/Ubuntu)
 - Ollama (for local embeddings) — optional but recommended
 
-### Install
+### Quick Install (Linux & macOS)
 
 ```bash
-# Install the latest release
-CGO_ENABLED=1 go install -tags sqlite_fts5 github.com/jrimmer/chandra/cmd/chandrad@latest
-CGO_ENABLED=1 go install -tags sqlite_fts5 github.com/jrimmer/chandra/cmd/chandra@latest
+curl -fsSL https://raw.githubusercontent.com/jrimmer/chandra/main/install.sh | sh
 ```
 
-Or build from source:
+This detects your OS, installs prerequisites (Go, GCC, SQLite), builds Chandra from source, and runs `chandra init` to set up your configuration.
+
+### Manual Install
 
 ```bash
+# Option 1: go install (requires Go 1.23+, GCC, libsqlite3-dev)
+CGO_ENABLED=1 go install -tags sqlite_fts5 github.com/jrimmer/chandra/cmd/chandrad@latest
+CGO_ENABLED=1 go install -tags sqlite_fts5 github.com/jrimmer/chandra/cmd/chandra@latest
+
+# Option 2: build from source
 git clone https://github.com/jrimmer/chandra.git
 cd chandra
 make build          # outputs bin/chandrad and bin/chandra
