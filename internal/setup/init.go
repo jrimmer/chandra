@@ -901,7 +901,12 @@ func runChannelStage(ctx context.Context, discordToken, channelID, accessPolicy 
 	form2 := huh.NewForm(huh.NewGroup(
 		huh.NewInput().
 			Title("Discord bot token").
-			Description("Create one at https://discord.com/developers/applications\n→ New Application → Bot → Reset Token → copy it.\nEnable MESSAGE CONTENT INTENT under Bot → Privileged Gateway Intents.\nInvite with: OAuth2 → URL Generator → bot scope → Send Messages + Read Message History.").
+			Description("1. Go to https://discord.com/developers/applications\n"+
+				"2. New Application → name it → Bot (left sidebar) → Reset Token → copy it\n"+
+				"3. Bot → Privileged Gateway Intents → enable MESSAGE CONTENT INTENT\n"+
+				"4. OAuth2 → URL Generator → check 'bot' scope\n"+
+				"5. Bot Permissions: Send Messages, Read Message History, Add Reactions, View Channels\n"+
+				"6. Copy the generated URL → open it → invite the bot to your server").
 			EchoMode(huh.EchoModePassword).
 			Value(discordToken),
 		huh.NewInput().
