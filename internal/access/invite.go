@@ -293,3 +293,155 @@ type AllowedUser struct {
 	Source   string
 	AddedAt  time.Time
 }
+
+// AccessRequest represents a pending access request.
+type AccessRequest struct {
+	ID           string
+	ChannelID    string
+	UserID       string
+	Username     string
+	FirstMessage string
+	Status       string // pending | approved | denied | blocked
+	CreatedAt    time.Time
+	DecidedAt    *time.Time
+}
+
+// CreateRequest creates a new access request. Returns the request ID.
+// If a pending request already exists for this user+channel, returns its ID
+// and exists=true without creating a duplicate.
+func (s *Store) CreateRequest(ctx context.Context, channelID, userID, username, firstMessage string) (id string, exists bool, err error) {
+	// Check for existing pending request.
+	var existingID string
+	err = s.db.QueryRowContext(ctx,
+		`SELECT id FROM access_requests WHERE channel_id = ? AND user_id = ? AND status = 'pending'`,
+		channelID, userID,
+	).Scan(&existingID)
+	if err == nil {
+		return existingID, true, nil
+	}
+
+	// Check if user was previously denied/blocked — don't allow re-request.
+	var blockedStatus string
+	err = s.db.QueryRowContext(ctx,
+		`SELECT status FROM access_requests WHERE channel_id = ? AND user_id = ? AND status = 'blocked' ORDER BY created_at DESC LIMIT 1`,
+		channelID, userID,
+	).Scan(&blockedStatus)
+	if err == nil {
+		return "", false, fmt.Errorf("user is blocked")
+	}
+
+	id = fmt.Sprintf("req_%d_%s", time.Now().UnixMilli(), userID[:min(8, len(userID))])
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO access_requests (id, channel_id, user_id, username, first_message, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
+		id, channelID, userID, username, firstMessage, time.Now().Unix(),
+	)
+	if err != nil {
+		return "", false, fmt.Errorf("create access request: %w", err)
+	}
+	return id, false, nil
+}
+
+// ApproveRequest approves a pending access request and adds the user to
+// allowed_users. Returns the request details for notification purposes.
+func (s *Store) ApproveRequest(ctx context.Context, requestID string) (*AccessRequest, error) {
+	var req AccessRequest
+	var createdAt int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, channel_id, user_id, username, first_message, status, created_at FROM access_requests WHERE id = ?`,
+		requestID,
+	).Scan(&req.ID, &req.ChannelID, &req.UserID, &req.Username, &req.FirstMessage, &req.Status, &createdAt)
+	if err != nil {
+		return nil, fmt.Errorf("request not found: %s", requestID)
+	}
+	if req.Status != "pending" {
+		return nil, fmt.Errorf("request %s is already %s", requestID, req.Status)
+	}
+	req.CreatedAt = time.Unix(createdAt, 0)
+
+	now := time.Now()
+	req.DecidedAt = &now
+
+	_, err = s.db.ExecContext(ctx,
+		`UPDATE access_requests SET status = 'approved', decided_at = ? WHERE id = ?`,
+		now.Unix(), requestID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("approve request: %w", err)
+	}
+
+	// Add to allowed_users.
+	err = s.AddUser(ctx, req.ChannelID, req.UserID, req.Username, "request")
+	if err != nil {
+		return nil, fmt.Errorf("add user after approval: %w", err)
+	}
+
+	return &req, nil
+}
+
+// DenyRequest denies a pending access request. If block is true, marks as
+// "blocked" so the user cannot re-request.
+func (s *Store) DenyRequest(ctx context.Context, requestID string, block bool) (*AccessRequest, error) {
+	var req AccessRequest
+	var createdAt int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, channel_id, user_id, username, first_message, status, created_at FROM access_requests WHERE id = ?`,
+		requestID,
+	).Scan(&req.ID, &req.ChannelID, &req.UserID, &req.Username, &req.FirstMessage, &req.Status, &createdAt)
+	if err != nil {
+		return nil, fmt.Errorf("request not found: %s", requestID)
+	}
+	if req.Status != "pending" {
+		return nil, fmt.Errorf("request %s is already %s", requestID, req.Status)
+	}
+	req.CreatedAt = time.Unix(createdAt, 0)
+
+	status := "denied"
+	if block {
+		status = "blocked"
+	}
+	now := time.Now()
+	req.DecidedAt = &now
+
+	_, err = s.db.ExecContext(ctx,
+		`UPDATE access_requests SET status = ?, decided_at = ? WHERE id = ?`,
+		status, now.Unix(), requestID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("deny request: %w", err)
+	}
+	return &req, nil
+}
+
+// FindRequestByApprovalMessage finds a pending access request by looking up
+// which request was sent to the owner in a specific DM message.
+func (s *Store) FindRequestByApprovalMessage(ctx context.Context, messageID string) (*AccessRequest, error) {
+	var req AccessRequest
+	var createdAt int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, channel_id, user_id, username, first_message, status, created_at FROM access_requests WHERE approval_message_id = ? AND status = 'pending'`,
+		messageID,
+	).Scan(&req.ID, &req.ChannelID, &req.UserID, &req.Username, &req.FirstMessage, &req.Status, &createdAt)
+	if err != nil {
+		return nil, fmt.Errorf("no pending request for message %s", messageID)
+	}
+	req.CreatedAt = time.Unix(createdAt, 0)
+	return &req, nil
+}
+
+// SetApprovalMessageID stores the Discord message ID used to notify the owner
+// about this request, enabling reaction-based approve/deny.
+func (s *Store) SetApprovalMessageID(ctx context.Context, requestID, messageID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE access_requests SET approval_message_id = ? WHERE id = ?`,
+		messageID, requestID,
+	)
+	return err
+}
+
+// min returns the smaller of a and b.
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}

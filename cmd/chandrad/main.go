@@ -596,6 +596,65 @@ func run(ctx context.Context, safeMode bool) error {
 		execApproverMu.Lock()
 		execApproverDelegate = dc
 		execApproverMu.Unlock()
+
+		// Wire DM reaction handler for access request approve/deny.
+		if cfg.Channels.Discord.AccessPolicy == "request" {
+			dc.OnDMReaction(func(messageID, userID, emoji string) {
+				if emoji != "✅" && emoji != "❌" {
+					return
+				}
+				invStore := access.NewStore(db)
+				req, findErr := invStore.FindRequestByApprovalMessage(ctx, messageID)
+				if findErr != nil {
+					return // not an access request message
+				}
+
+				if emoji == "✅" {
+					approved, approveErr := invStore.ApproveRequest(ctx, req.ID)
+					if approveErr != nil {
+						slog.Error("chandrad: access request approve failed", "request_id", req.ID, "err", approveErr)
+						return
+					}
+					slog.Info("chandrad: access request approved",
+						"request_id", req.ID, "user_id", approved.UserID, "approved_by", userID)
+
+					// Notify the user in the original channel.
+					_, _ = dc.Send(ctx, channels.OutboundMessage{
+						ChannelID: approved.ChannelID,
+						Content:   fmt.Sprintf("✅ <@%s> Your access request has been approved! You can now talk to me.", approved.UserID),
+					})
+
+					// Update the owner's DM to show it's been handled.
+					if dmChID, chErr := dc.DMChannelID(userID); chErr == nil {
+						_ = dc.Edit(ctx, dmChID, messageID,
+							fmt.Sprintf("✅ **Approved** — <@%s> (`%s`) now has access to <#%s>.",
+								approved.UserID, approved.Username, approved.ChannelID))
+					}
+
+				} else { // ❌
+					denied, denyErr := invStore.DenyRequest(ctx, req.ID, false)
+					if denyErr != nil {
+						slog.Error("chandrad: access request deny failed", "request_id", req.ID, "err", denyErr)
+						return
+					}
+					slog.Info("chandrad: access request denied",
+						"request_id", req.ID, "user_id", denied.UserID, "denied_by", userID)
+
+					// Notify the user in the original channel.
+					_, _ = dc.Send(ctx, channels.OutboundMessage{
+						ChannelID: denied.ChannelID,
+						Content:   fmt.Sprintf("❌ <@%s> Your access request has been denied.", denied.UserID),
+					})
+
+					// Update the owner's DM.
+					if dmChID, chErr := dc.DMChannelID(userID); chErr == nil {
+						_ = dc.Edit(ctx, dmChID, messageID,
+							fmt.Sprintf("❌ **Denied** — <@%s> (`%s`) was not granted access to <#%s>.",
+								denied.UserID, denied.Username, denied.ChannelID))
+					}
+				}
+			})
+		}
 	} else {
 		slog.Info("chandrad: Discord not configured, skipping")
 	}
@@ -1156,8 +1215,81 @@ func run(ctx context.Context, safeMode bool) error {
 							msg.ChannelID, msg.UserID,
 						).Scan(&allowed)
 						if !allowed {
-							slog.Warn("chandrad: discord: unauthorized user; dropping message",
-								"user_id", msg.UserID, "channel_id", msg.ChannelID, "policy", policy)
+							if policy == "request" && discordDC != nil {
+								// Access request flow: notify the owner and tell the user to wait.
+								invStore := access.NewStore(db)
+								reqID, exists, reqErr := invStore.CreateRequest(ctx, msg.ChannelID, msg.UserID, msg.UserID, msg.Content)
+								if reqErr != nil {
+									slog.Warn("chandrad: access request failed",
+										"user_id", msg.UserID, "err", reqErr)
+									_, _ = discordDC.Send(ctx, channels.OutboundMessage{
+										ChannelID: msg.ChannelID,
+										Content:   "Sorry, your access request could not be processed.",
+									})
+								} else if exists {
+									slog.Info("chandrad: duplicate access request (already pending)",
+										"user_id", msg.UserID, "request_id", reqID)
+									_, _ = discordDC.Send(ctx, channels.OutboundMessage{
+										ChannelID: msg.ChannelID,
+										ReplyToID: msg.MessageID,
+										Content:   "Your access request is already pending — hang tight!",
+									})
+								} else {
+									slog.Info("chandrad: new access request created",
+										"user_id", msg.UserID, "request_id", reqID)
+
+									// Notify the user.
+									_, _ = discordDC.Send(ctx, channels.OutboundMessage{
+										ChannelID: msg.ChannelID,
+										ReplyToID: msg.MessageID,
+										Content:   "📋 Your access request has been submitted! You'll be notified when it's approved.",
+									})
+
+									// DM the owner (first allowed_user) with approve/deny.
+									ownerID := ""
+									if len(cfg.Channels.Discord.AllowedUsers) > 0 {
+										ownerID = cfg.Channels.Discord.AllowedUsers[0]
+									} else {
+										// Fall back to first user in the allowlist table.
+										_ = db.QueryRowContext(ctx,
+											`SELECT user_id FROM allowed_users WHERE channel_id = ? ORDER BY added_at ASC LIMIT 1`,
+											msg.ChannelID,
+										).Scan(&ownerID)
+									}
+
+									if ownerID != "" {
+										preview := msg.Content
+										if len(preview) > 200 {
+											preview = preview[:200] + "…"
+										}
+										dmContent := fmt.Sprintf(
+											"📋 **Access Request**\n\n"+
+												"**User:** <@%s> (`%s`)\n"+
+												"**Channel:** <#%s>\n"+
+												"**Message:** %s\n\n"+
+												"React ✅ to approve or ❌ to deny.",
+											msg.UserID, msg.UserID,
+											msg.ChannelID,
+											preview,
+										)
+										_, dmMsgID, dmErr := discordDC.SendDM(ctx, ownerID, dmContent)
+										if dmErr != nil {
+											slog.Error("chandrad: failed to DM owner for access request",
+												"owner_id", ownerID, "err", dmErr)
+										} else {
+											// Store the DM message ID for reaction lookup.
+											_ = invStore.SetApprovalMessageID(ctx, reqID, dmMsgID)
+											// Add ✅ and ❌ reactions as clickable approve/deny buttons.
+											_ = discordDC.AddReactionDM(ctx, ownerID, dmMsgID, "✅", "❌")
+											slog.Info("chandrad: access request DM sent to owner",
+												"owner_id", ownerID, "dm_msg_id", dmMsgID, "request_id", reqID)
+										}
+									}
+								}
+							} else {
+								slog.Warn("chandrad: discord: unauthorized user; dropping message",
+									"user_id", msg.UserID, "channel_id", msg.ChannelID, "policy", policy)
+							}
 							continue
 						}
 					}

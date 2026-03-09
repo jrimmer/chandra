@@ -88,6 +88,10 @@ type Discord struct {
 	// approvalAllowedUsers gates which user IDs can approve commands.
 	approvalBroker       *approvals.Broker
 	approvalAllowedUsers map[string]struct{}
+
+	// onDMReaction is called when the owner reacts to a DM (used for
+	// access request approve/deny flow). Parameters: messageID, userID, emoji.
+	onDMReaction func(messageID, userID, emoji string)
 }
 
 // deliveryTracker holds the active reaction controller and typing heartbeat
@@ -116,7 +120,8 @@ func NewDiscord(token string, channelIDs []string) (*Discord, error) {
 	// IntentGuildMessages: receive MESSAGE_CREATE events in guild channels.
 	// IntentMessageContent: receive message body (privileged intent; must be
 	// enabled in the Discord Developer Portal under Privileged Gateway Intents).
-	session.Identify.Intents = discordgo.IntentGuildMessages | discordgo.IntentMessageContent | discordgo.IntentGuildMessageReactions
+	session.Identify.Intents = discordgo.IntentGuildMessages | discordgo.IntentMessageContent | discordgo.IntentGuildMessageReactions |
+		discordgo.IntentDirectMessages | discordgo.IntentDirectMessageReactions
 
 	allowed := make(map[string]struct{}, len(channelIDs))
 	for _, id := range channelIDs {
@@ -276,13 +281,20 @@ func (d *Discord) Listen(ctx context.Context, msgs chan<- channels.InboundMessag
 			slog.Warn("discord: disconnected; discordgo will attempt reconnect")
 		})
 
-		// Exec approval: resolve pending approval requests on ✅/❌ reactions.
+		// Reaction handler for exec approvals and DM access requests.
 		d.session.AddHandler(func(s *discordgo.Session, e *discordgo.MessageReactionAdd) {
-			if d.approvalBroker == nil {
-				return
-			}
 			// Ignore reactions from the bot itself.
 			if e.UserID == s.State.User.ID {
+				return
+			}
+
+			// DM reaction callback (access request approve/deny).
+			if e.GuildID == "" && d.onDMReaction != nil {
+				d.onDMReaction(e.MessageID, e.UserID, e.Emoji.Name)
+			}
+
+			// Exec approval: resolve pending approval requests on ✅/❌ reactions.
+			if d.approvalBroker == nil {
 				return
 			}
 			// Gate to allowed users.
@@ -343,6 +355,59 @@ func (d *Discord) Send(ctx context.Context, msg channels.OutboundMessage) (strin
 		return "", fmt.Errorf("discord: send message: %w", err)
 	}
 	return sent.ID, nil
+}
+
+// SendDM sends a direct message to a Discord user by their user ID.
+// Returns the DM channel ID and message ID, or an error.
+func (d *Discord) SendDM(ctx context.Context, userID, content string) (channelID string, messageID string, err error) {
+	ch, err := d.session.UserChannelCreate(userID)
+	if err != nil {
+		return "", "", fmt.Errorf("discord: create DM channel for %s: %w", userID, err)
+	}
+	sent, err := d.session.ChannelMessageSend(ch.ID, content)
+	if err != nil {
+		return ch.ID, "", fmt.Errorf("discord: send DM to %s: %w", userID, err)
+	}
+	return ch.ID, sent.ID, nil
+}
+
+// AddReaction adds an emoji reaction to a message. If channelID is empty,
+// it attempts to look up the channel from the session's DM channels.
+func (d *Discord) AddReaction(ctx context.Context, channelID, messageID, emoji string) error {
+	if channelID == "" {
+		// Try to find the channel via the message — for DMs we stored it during SendDM.
+		return fmt.Errorf("channelID is required for AddReaction")
+	}
+	return d.session.MessageReactionAdd(channelID, messageID, emoji)
+}
+
+// AddReactionDM adds emoji reactions to a DM message sent to a user.
+func (d *Discord) AddReactionDM(ctx context.Context, userID, messageID string, emojis ...string) error {
+	ch, err := d.session.UserChannelCreate(userID)
+	if err != nil {
+		return fmt.Errorf("discord: create DM channel for reactions: %w", err)
+	}
+	for _, emoji := range emojis {
+		if err := d.session.MessageReactionAdd(ch.ID, messageID, emoji); err != nil {
+			return fmt.Errorf("discord: add reaction %s: %w", emoji, err)
+		}
+	}
+	return nil
+}
+
+// OnDMReaction registers a callback for reactions on DM messages.
+// Used by the access request flow to handle approve/deny.
+func (d *Discord) OnDMReaction(fn func(messageID, userID, emoji string)) {
+	d.onDMReaction = fn
+}
+
+// DMChannelID returns the DM channel ID for a given user, creating it if needed.
+func (d *Discord) DMChannelID(userID string) (string, error) {
+	ch, err := d.session.UserChannelCreate(userID)
+	if err != nil {
+		return "", err
+	}
+	return ch.ID, nil
 }
 
 // Edit replaces the content of a previously sent message.
