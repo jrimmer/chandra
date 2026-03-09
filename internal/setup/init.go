@@ -622,12 +622,11 @@ dimensions = %d
 	}
 
 	// --- Stage 5b: Daemon install stub ---
-	// Full daemon install (systemd/launchd) is deferred (design §10 "ship second", requires daemon lifecycle work).
 	fmt.Println()
-	fmt.Println("To run Chandra persistently, start the daemon manually:")
-	fmt.Println("  chandrad               — background daemon")
-	fmt.Println("  chandrad --foreground  — foreground (useful for debugging)")
-	fmt.Println("  (Automated service install coming in a future release)")
+	fmt.Println("To run Chandra:")
+	fmt.Println("  chandra service install — install as a system service (starts on boot)")
+	fmt.Println("  chandra service start   — start the service")
+	fmt.Println("  chandrad --foreground   — run in foreground (useful for debugging)")
 
 	// --- Stage 6: Final doctor pass ---
 	// Uses the exact same DoctorCheck implementations as `chandra doctor` — the two

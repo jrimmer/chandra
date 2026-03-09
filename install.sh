@@ -321,9 +321,10 @@ done_message() {
         printf "\n"
         printf "  ${BOLD}Then:${RESET}\n"
     fi
-    printf "    ${CYAN}chandrad${RESET}          Start the daemon\n"
-    printf "    ${CYAN}chandra status${RESET}    Check agent status\n"
-    printf "    ${CYAN}chandra init${RESET}      Re-run setup\n"
+    printf "    ${CYAN}chandra service install${RESET}  Install as a system service\n"
+    printf "    ${CYAN}chandra service start${RESET}   Start the service\n"
+    printf "    ${CYAN}chandrad --foreground${RESET}   Run in foreground (debugging)\n"
+    printf "    ${CYAN}chandra status${RESET}          Check agent status\n"
     printf "\n"
     printf "  ${BOLD}Docs:${RESET}  https://github.com/jrimmer/chandra\n"
     printf "\n"
