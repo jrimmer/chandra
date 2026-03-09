@@ -1231,7 +1231,7 @@ func run(ctx context.Context, safeMode bool) error {
 										"user_id", msg.UserID, "request_id", reqID)
 									_, _ = discordDC.Send(ctx, channels.OutboundMessage{
 										ChannelID: msg.ChannelID,
-										ReplyToID: msg.MessageID,
+										ReplyToID: msg.ID,
 										Content:   "Your access request is already pending — hang tight!",
 									})
 								} else {
@@ -1241,7 +1241,7 @@ func run(ctx context.Context, safeMode bool) error {
 									// Notify the user.
 									_, _ = discordDC.Send(ctx, channels.OutboundMessage{
 										ChannelID: msg.ChannelID,
-										ReplyToID: msg.MessageID,
+										ReplyToID: msg.ID,
 										Content:   "📋 Your access request has been submitted! You'll be notified when it's approved.",
 									})
 
