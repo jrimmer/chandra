@@ -1,4 +1,5 @@
 # Compiled binaries
-chandra
-chandrad
+/chandra
+/chandrad
+/bin/
 .worktrees/
