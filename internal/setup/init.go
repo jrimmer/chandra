@@ -120,7 +120,9 @@ func Run(ctx context.Context, opts Options) error {
 			huh.NewSelect[string]().
 				Title(fmt.Sprintf("Configuration already exists at %s", opts.ConfigPath)).
 				Options(
-					huh.NewOption("Update credentials (re-enter API key and bot token; config regenerated from wizard values, other settings reset to defaults)", "reconfigure"),
+					huh.NewOption("Update provider API key only", "update_provider"),
+					huh.NewOption("Update Discord bot token only", "update_discord"),
+					huh.NewOption("Reconfigure all (re-enter API key and bot token; config regenerated)", "reconfigure"),
 					huh.NewOption("Fresh start (archive and replace existing config)", "fresh"),
 					huh.NewOption("Cancel", "cancel"),
 				).
@@ -141,6 +143,46 @@ func Run(ctx context.Context, opts Options) error {
 			freshArchivePath = opts.ConfigPath + ".bak"
 			isFreshStart = true
 			_ = DeleteCheckpoint(cpPath)
+		case "update_provider":
+			var newKey string
+			keyForm := huh.NewForm(huh.NewGroup(
+				huh.NewInput().
+					Title("Enter your new provider API key").
+					EchoMode(huh.EchoModePassword).
+					Value(&newKey),
+			))
+			if err := keyForm.Run(); err != nil {
+				return err
+			}
+			if newKey == "" {
+				fmt.Println("No key entered; config unchanged.")
+				return nil
+			}
+			if err := patchConfigSecret(opts.ConfigPath, "api_key", newKey); err != nil {
+				return fmt.Errorf("update provider API key: %w", err)
+			}
+			fmt.Println("\u2705 Provider API key updated.")
+			return nil
+		case "update_discord":
+			var newToken string
+			tokenForm := huh.NewForm(huh.NewGroup(
+				huh.NewInput().
+					Title("Enter your new Discord bot token").
+					EchoMode(huh.EchoModePassword).
+					Value(&newToken),
+			))
+			if err := tokenForm.Run(); err != nil {
+				return err
+			}
+			if newToken == "" {
+				fmt.Println("No token entered; config unchanged.")
+				return nil
+			}
+			if err := patchConfigSecret(opts.ConfigPath, "bot_token", newToken); err != nil {
+				return fmt.Errorf("update Discord bot token: %w", err)
+			}
+			fmt.Println("\u2705 Discord bot token updated.")
+			return nil
 		case "reconfigure":
 			// Delete any dangling checkpoint — reconfigure always starts fresh from the
 			// existing config file, never from a previous partial wizard run.
@@ -1237,4 +1279,36 @@ func checkpointSummary(cp *Checkpoint) string {
 	parts = append(parts, mark(cp.IdentityDone, "identity"))
 	parts = append(parts, mark(cp.ConfigWritten, "config"))
 	return "Progress: " + strings.Join(parts, "  ")
+}
+
+// patchConfigSecret replaces a single secret value in the config file without
+// regenerating the entire config. This preserves all user edits, budget weights,
+// scheduler settings, extra channel IDs, and other non-wizard-managed fields.
+func patchConfigSecret(configPath, key, newValue string) error {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	found := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, key+" ") || strings.HasPrefix(trimmed, key+"=") {
+			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+			lines[i] = fmt.Sprintf("%s%s = %q", indent, key, newValue)
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("key %q not found in %s", key, configPath)
+	}
+
+	bakPath := configPath + ".bak"
+	if err := os.WriteFile(bakPath, data, 0600); err != nil {
+		return fmt.Errorf("write backup: %w", err)
+	}
+
+	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0600)
 }
