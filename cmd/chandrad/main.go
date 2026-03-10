@@ -2510,13 +2510,21 @@ func stripQuietSignal(resp string) (cleaned string, wasQuiet bool) {
 
 	// Check if the entire response is just the signal.
 	upper := strings.ToUpper(trimmed)
-	if upper == "QUIET" || upper == "QUICK" || upper == "**QUIET**" {
+	// Exact match: canonical + common LLM typos (QIET, QUET, QUEIT, QIUET, QUITE).
+	// Cast wide: a false positive (suppressing a real message containing only
+	// a QUIET-like word) is far less harmful than a false negative (posting
+	// a suppression signal into the channel).
+	if upper == "QUIET" || upper == "QUICK" || upper == "**QUIET**" ||
+		upper == "QIET" || upper == "QUET" || upper == "QUEIT" ||
+		upper == "QIUET" || upper == "QUITE" || upper == "QUIE" {
 		return "", true
 	}
 
 	// Check if QUIET appears anywhere (case-insensitive). If so, strip it
 	// and check whether meaningful content remains.
-	quietRe := regexp.MustCompile(`(?i)\*{0,2}QUIE?T\*{0,2}`)
+	// Regex catches QUIET and common LLM misspellings embedded in longer text:
+	// QIET (dropped U), QUET (dropped I), QUEIT/QIUET (transposed), QUITE (transposed).
+	quietRe := regexp.MustCompile(`(?i)\*{0,2}(?:QUIET|QIET|QUET|QUEIT|QIUET|QUITE|QUIE)\*{0,2}`)
 	if quietRe.MatchString(trimmed) {
 		stripped := strings.TrimSpace(quietRe.ReplaceAllString(trimmed, ""))
 		// If nothing meaningful remains after stripping, suppress entirely.
